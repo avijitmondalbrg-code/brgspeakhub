@@ -31,7 +31,7 @@ const createEmptyPlan = (userId: string = 'local-user'): Omit<TherapyPlan, 'crea
   recommendations: '',
   frequencyOfTherapy: '',
   reviewDate: '',
-  therapistName: '',
+  therapistName: 'BRG',
   therapistSignature: ''
 });
 
@@ -57,6 +57,46 @@ export default function App() {
   
   // Paper Print Element Ref for high fidelity PDF convert
   const printAreaRef = useRef<HTMLDivElement>(null);
+
+  // Scaler states for centering and responsive fit of the 210mm A4 preview on any laptop/mobile viewport
+  const [previewScale, setPreviewScale] = useState(1);
+  const [previewHeight, setPreviewHeight] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (view !== 'form') return;
+    const updateDimensions = () => {
+      if (containerRef.current && printAreaRef.current) {
+        const parentWidth = containerRef.current.clientWidth;
+        // The standard width of A4 in pixels is approx 794px.
+        const paperWidth = printAreaRef.current.offsetWidth || 794; 
+        const scale = Math.min(1, (parentWidth - 16) / paperWidth);
+        const paperHeight = printAreaRef.current.offsetHeight || 1123;
+        
+        setPreviewScale(scale);
+        setPreviewHeight(paperHeight * scale);
+      }
+    };
+
+    // Delay briefly to allow rendering/fonts/widths to settle of A4 DOM
+    const timer = setTimeout(updateDimensions, 100);
+
+    const observer = new ResizeObserver(() => {
+      updateDimensions();
+    });
+
+    if (containerRef.current) {
+      observer.observe(containerRef.current);
+    }
+    if (printAreaRef.current) {
+      observer.observe(printAreaRef.current);
+    }
+
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [view, currentPlan]);
 
   // Authenticate monitor
   useEffect(() => {
@@ -321,13 +361,168 @@ export default function App() {
       type: 'info'
     });
 
+    // Helper to translate OKLCH and OKLAB color formats back to safe equivalents (HSL/RGB)
+    const approximateOklchToHsl = (cssText: string): string => {
+      if (!cssText) return cssText;
+      
+      // Replace oklch() with equivalent hsl()
+      let result = cssText.replace(
+        /oklch\(\s*([0-9.]+%?)\s+([0-9.]+%?)\s+([0-9.]+%?|\w+)(?:\s*\/\s*([0-9.]+%?))?\s*\)/g,
+        (_, lStr, cStr, hStr, aStr) => {
+          try {
+            let l = parseFloat(lStr);
+            if (lStr.includes('%')) l = l / 100;
+            let c = parseFloat(cStr);
+            if (cStr.includes('%')) c = c / 100;
+            let h = parseFloat(hStr);
+            if (isNaN(h)) h = 0;
+            
+            // Saturation proxy: C * 250% (capped at 100%)
+            const s = Math.min(100, Math.max(0, c * 250));
+            const lPct = Math.min(100, Math.max(0, l * 100));
+            
+            if (aStr !== undefined) {
+              return `hsla(${h.toFixed(1)}, ${s.toFixed(1)}%, ${lPct.toFixed(1)}%, ${aStr})`;
+            } else {
+              return `hsl(${h.toFixed(1)}, ${s.toFixed(1)}%, ${lPct.toFixed(1)}%)`;
+            }
+          } catch {
+            return '#888888';
+          }
+        }
+      );
+
+      // Replace oklab() with equivalent rgb() 
+      result = result.replace(
+        /oklab\(\s*([0-9.]+%?)\s+([0-9.-]+%?)\s+([0-9.-]+%?)(?:\s*\/\s*([0-9.]+%?))?\s*\)/g,
+        (_, lStr, __, ___, alphaStr) => {
+          try {
+            let l = parseFloat(lStr);
+            if (lStr.includes('%')) l = l / 100;
+            const grayVal = Math.round(l * 255);
+            if (alphaStr !== undefined) {
+              return `rgba(${grayVal}, ${grayVal}, ${grayVal}, ${alphaStr})`;
+            } else {
+              return `rgb(${grayVal}, ${grayVal}, ${grayVal})`;
+            }
+          } catch {
+            return '#888888';
+          }
+        }
+      );
+
+      return result;
+    };
+
+    // 1. BACKUP & CLEAN ELEMENT STYLE TEXT IN DOM STYLETAGS
+    const styleElements = Array.from(document.querySelectorAll('style'));
+    const styleBackups: Array<{ element: HTMLStyleElement; originalText: string }> = [];
+    
+    try {
+      for (const styleElt of styleElements) {
+        const text = styleElt.textContent || '';
+        if (text.includes('oklch') || text.includes('oklab')) {
+          styleBackups.push({ element: styleElt, originalText: text });
+          styleElt.textContent = approximateOklchToHsl(text);
+        }
+      }
+    } catch (err) {
+      console.warn('Could not rewrite some custom styles text:', err);
+    }
+
+    // 2. STYLESHEET CSSOM SUB-RULES CLEANING WORKAROUND
+    const stylesBackup: Array<{
+      sheet: CSSStyleSheet;
+      rules: Array<{ index: number; cssText: string }>;
+    }> = [];
+
+    try {
+      for (let i = 0; i < document.styleSheets.length; i++) {
+        try {
+          const sheet = document.styleSheets[i];
+          const rules = sheet.cssRules || sheet.rules;
+          if (!rules) continue;
+          
+          const ruleBackup: Array<{ index: number; cssText: string }> = [];
+          for (let j = rules.length - 1; j >= 0; j--) {
+            const rule = rules[j];
+            if (rule && rule.cssText && (rule.cssText.includes('oklch') || rule.cssText.includes('oklab'))) {
+              ruleBackup.push({ index: j, cssText: rule.cssText });
+              sheet.deleteRule(j);
+            }
+          }
+          
+          if (ruleBackup.length > 0) {
+            ruleBackup.sort((a, b) => a.index - b.index);
+            stylesBackup.push({ sheet, rules: ruleBackup });
+          }
+        } catch (e) {
+          // Ignore cross-origin access errors
+          console.warn('Could not process some stylesheet rules:', e);
+        }
+      }
+    } catch (globalE) {
+      console.error('Error pre-filtering style rules:', globalE);
+    }
+
+    // 3. SECURE BROWSER COMPUTED STYLES INTERCEPTOR
+    const originalGetComputedStyle = window.getComputedStyle;
+    try {
+      (window as any).getComputedStyle = function (elt: Element, pseudoElt?: string | null): CSSStyleDeclaration {
+        const style = originalGetComputedStyle.call(window, elt, pseudoElt);
+        return new Proxy(style, {
+          get(target, prop) {
+            // Avoid passing the receiver (Proxy) which causes "Illegal invocation" for native getters
+            const val = Reflect.get(target, prop);
+            if (typeof val === 'function') {
+              return function(this: any, ...args: any[]) {
+                const res = val.apply(target, args);
+                if (typeof res === 'string' && (res.includes('oklch') || res.includes('oklab'))) {
+                  return approximateOklchToHsl(res);
+                }
+                return res;
+              };
+            }
+            if (typeof val === 'string' && (val.includes('oklch') || val.includes('oklab'))) {
+              return approximateOklchToHsl(val);
+            }
+            return val;
+          }
+        });
+      };
+    } catch (proxyError) {
+      console.error('Could not set up window.getComputedStyle interceptor proxy:', proxyError);
+    }
+
     try {
       const element = document.getElementById('clinical-report-paper');
       if (!element) {
         throw new Error('Preview element not found.');
       }
 
-      // Hide shadow and force standard crisp dimensions for printing
+      // Pre-load and decode all images in the document to ensure they are printed in html2canvas
+      const documentImages = Array.from(element.querySelectorAll('img'));
+      await Promise.all(
+        documentImages.map((img) => {
+          if (img.complete) {
+            return img.decode ? img.decode().catch(() => {}) : Promise.resolve();
+          }
+          return new Promise<void>((resolve) => {
+            img.onload = () => {
+              if (img.decode) {
+                img.decode().then(resolve).catch(() => resolve());
+              } else {
+                resolve();
+              }
+            };
+            img.onerror = () => resolve();
+          });
+        })
+      );
+
+      // Brief delay to allow browser paint engine to settle image buffers
+      await new Promise((resolve) => setTimeout(resolve, 350));
+
       const opt = {
         scale: 2, // Retinal high resolution
         useCORS: true,
@@ -349,7 +544,6 @@ export default function App() {
       pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
       heightLeft -= pageHeight;
 
-      // Span multiple pages if the clinical findings are long
       while (heightLeft >= 0) {
         position = heightLeft - imgHeight;
         pdf.addPage();
@@ -371,8 +565,144 @@ export default function App() {
         type: 'error'
       });
     } finally {
+      // 4. RESTORE ALL STYLE MECHANICS TRANSPARENTLY
+      
+      // Restores window.getComputedStyle proxy wrapper
+      try {
+        (window as any).getComputedStyle = originalGetComputedStyle;
+      } catch (e) {
+        console.error('Could not restore getComputedStyle:', e);
+      }
+
+      // Restores inline `<style>` tags texts
+      for (const backup of styleBackups) {
+        try {
+          backup.element.textContent = backup.originalText;
+        } catch (e) {
+          console.warn('Could not restore style tag content:', e);
+        }
+      }
+
+      // Restores specific stylesheet rule backups
+      for (const backup of stylesBackup) {
+        const { sheet, rules } = backup;
+        for (const rule of rules) {
+          try {
+            sheet.insertRule(rule.cssText, rule.index);
+          } catch (restoreError) {
+            try {
+              sheet.insertRule(rule.cssText, sheet.cssRules.length);
+            } catch (fallbackError) {
+              console.warn('Failed to restore custom rule:', rule.cssText, fallbackError);
+            }
+          }
+        }
+      }
       setIsExporting(false);
     }
+  };
+
+  // High fidelity browser print integration
+  const printReport = () => {
+    const element = document.getElementById('clinical-report-paper');
+    if (!element) return;
+
+    // Create an iframe to cleanly hold the print copy of report paper
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const iframeDoc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (!iframeDoc) return;
+
+    // Collect head tags (metadata, link stylesheets, style tags)
+    let headTags = '';
+    document.querySelectorAll('link, style').forEach((node) => {
+      headTags += node.outerHTML;
+    });
+
+    // Write pristine document content to the iframe
+    iframeDoc.open();
+    iframeDoc.write(`
+      <html>
+        <head>
+          <title>Clinical Speech Assessment Report</title>
+          ${headTags}
+          <style>
+            @media print {
+              @page {
+                size: A4;
+                margin: 15mm;
+              }
+              body {
+                background: white !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+              }
+            }
+            body {
+              font-family: 'Inter', sans-serif;
+              background-color: white;
+              padding: 0;
+              margin: 0;
+            }
+            #clinical-report-paper {
+              box-shadow: none !important;
+              width: 100% !important;
+              max-width: 210mm !important;
+              margin: 0 auto !important;
+              padding: 0 !important;
+            }
+            /* Form inputs styling for seamless printing */
+            input, textarea, select {
+              border: none !important;
+              outline: none !important;
+              background: transparent !important;
+              padding: 0 !important;
+              appearance: none !important;
+              -webkit-appearance: none !important;
+            }
+          </style>
+        </head>
+        <body>
+          <div id="clinical-report-paper" class="bg-white text-slate-900 w-[210mm] min-h-[297mm] p-12 pr-14 pl-14 relative text-xs flex flex-col justify-between">
+            ${element.innerHTML}
+          </div>
+          <script>
+            // Synchronize the input values that do not retain value inside .innerHTML
+            const originalInput = window.parent.document.getElementById('inline-therapist-name-input');
+            const iframeInput = document.getElementById('inline-therapist-name-input');
+            if (originalInput && iframeInput) {
+              iframeInput.value = originalInput.value;
+            }
+
+            // Ensure images of letterhead and stamp signatures are completed before print
+            window.onload = function() {
+              setTimeout(function() {
+                window.focus();
+                window.print();
+                setTimeout(function() {
+                  window.parent.document.body.removeChild(window.frameElement);
+                }, 500);
+              }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    iframeDoc.close();
+
+    setNotification({
+      message: 'Opening system print dialog...',
+      type: 'info'
+    });
   };
 
   // Filter plans list
@@ -466,7 +796,7 @@ export default function App() {
               {user ? user.email?.substring(0, 2).toUpperCase() : 'SLP'}
             </div>
             <div className="text-xs min-w-0 flex-1">
-              <p className="font-semibold text-slate-200 truncate">{user ? user.email : 'Dr. Arpita Das'}</p>
+              <p className="font-semibold text-slate-200 truncate">{user ? user.email : 'BRG'}</p>
               <p className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">Senior SLP</p>
             </div>
           </div>
@@ -580,7 +910,7 @@ export default function App() {
                     {user ? user.email?.substring(0, 2).toUpperCase() : 'SLP'}
                   </div>
                   <div className="text-xs min-w-0 flex-1">
-                    <p className="font-semibold text-slate-200 truncate">{user ? user.email : 'Dr. Arpita Das'}</p>
+                    <p className="font-semibold text-slate-200 truncate">{user ? user.email : 'BRG'}</p>
                     <p className="text-slate-500 text-[9px] uppercase font-bold tracking-wider">Senior SLP</p>
                   </div>
                 </div>
@@ -1241,7 +1571,7 @@ export default function App() {
                           <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Therapist Name & Reg ID</label>
                           <input
                             type="text"
-                            placeholder="e.g. Arpita Das, MS, CCC-SLP"
+                            placeholder="e.g. BRG, MS, CCC-SLP"
                             value={currentPlan.therapistName}
                             onChange={(e) => handleFormChange('therapistName', e.target.value)}
                             className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1293,34 +1623,64 @@ export default function App() {
                     <p className="text-[10px] text-slate-400 font-semibold mt-0.5">High definition vector print layout scale</p>
                   </div>
                   
-                  <button
-                    type="button"
-                    onClick={downloadReportAsPDF}
-                    disabled={isExporting}
-                    className="py-1 px-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-[10px] rounded-md cursor-pointer transition-all flex items-center gap-1 shrink-0 disabled:opacity-50"
-                    id="btn-export-pdf"
-                  >
-                    {isExporting ? <RefreshCw size={11} className="animate-spin" /> : <Download size={11} />}
-                    <span>Export PDF</span>
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={printReport}
+                      className="py-1 px-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] rounded-md cursor-pointer transition-all flex items-center gap-1 shrink-0"
+                      id="btn-print-report"
+                    >
+                      <Printer size={11} />
+                      <span>Print</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={downloadReportAsPDF}
+                      disabled={isExporting}
+                      className="py-1 px-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-[10px] rounded-md cursor-pointer transition-all flex items-center gap-1 shrink-0 disabled:opacity-50"
+                      id="btn-export-pdf"
+                    >
+                      {isExporting ? <RefreshCw size={11} className="animate-spin" /> : <Download size={11} />}
+                      <span>Export PDF</span>
+                    </button>
+                  </div>
                 </div>
 
-                <div className="bg-slate-300 rounded-xl p-3 border border-slate-200 overflow-x-auto">
-                  <div 
-                    ref={printAreaRef}
-                    id="clinical-report-paper"
-                    className="bg-white text-slate-900 w-[210mm] min-h-[297mm] p-12 pr-14 pl-14 mx-auto shadow-md relative text-xs flex flex-col justify-between"
-                    style={{ minWidth: '210mm' }}
+                <div 
+                  ref={containerRef} 
+                  className="bg-slate-300 rounded-xl p-3 border border-slate-200 overflow-hidden relative flex justify-center"
+                  style={{ height: previewHeight ? `${previewHeight + 24}px` : 'auto', minHeight: '350px' }}
+                >
+                  <div
+                    style={{
+                      transform: `translateX(-50%) scale(${previewScale})`,
+                      transformOrigin: 'top center',
+                      width: '210mm',
+                      position: 'absolute',
+                      left: '50%',
+                      top: '12px',
+                    }}
                   >
-                    <div className="space-y-5">
-                      
-                      {/* Letterhead */}
-                      <div className="border-b-2 border-blue-600 pb-3 flex justify-between items-start">
-                        <div className="flex items-center gap-2.5">
-                          <span className="w-8 h-8 bg-blue-600 text-white font-black rounded-lg flex items-center justify-center text-xs">ST</span>
+                    <div 
+                      ref={printAreaRef}
+                      id="clinical-report-paper"
+                      className="bg-white text-slate-900 w-[210mm] min-h-[297mm] p-12 pr-14 pl-14 shadow-md relative text-xs flex flex-col justify-between"
+                    >
+                      <div className="space-y-5">
+                        
+                        {/* Letterhead */}
+                        <div className="border-b-2 border-blue-600 pb-3 flex justify-between items-center">
+                          <div className="flex items-center gap-3">
+                            <img 
+                              src="https://www.bengalrehabilitationgroup.com/images/brg_logo.png" 
+                              alt="BRG Logo" 
+                              className="w-10 h-10 object-contain bg-white rounded p-1 shrink-0 bg-slate-50 border border-slate-105"
+                              referrerPolicy="no-referrer"
+                              crossOrigin="anonymous"
+                            />
                           <div>
-                            <h2 className="text-sm font-extrabold tracking-tight text-slate-950 uppercase leading-none">Vocalis Speech Specialty Clinic</h2>
-                            <p className="text-[8px] text-slate-400 font-bold uppercase tracking-wider mt-1">Clinical Speech Pathology Care Assessment</p>
+                            <h2 className="text-sm font-extrabold tracking-tight text-slate-950 uppercase leading-none">BRG Speak HUB</h2>
+                            <p className="text-[8px] text-slate-400 font-bold uppercase tracking-wider mt-1">Bengal Rehabilitation Group • Clinical Speech Assessment</p>
                           </div>
                         </div>
 
@@ -1437,9 +1797,15 @@ export default function App() {
                             </div>
                           )}
 
-                          <h4 className="text-[11px] font-bold text-slate-900 leading-none capitalize block">
-                            {currentPlan.therapistName || 'Dr. Arpita Das'}
-                          </h4>
+                          <input
+                            type="text"
+                            value={currentPlan.therapistName}
+                            onChange={(e) => handleFormChange('therapistName', e.target.value)}
+                            className="text-[11px] font-bold text-slate-900 leading-none capitalize block w-full text-right outline-none border-b border-dashed border-transparent hover:border-slate-300 focus:border-blue-500 bg-transparent py-0.5 print:border-none focus:ring-0"
+                            placeholder="Type Therapist Name..."
+                            title="Click to edit therapist name directly"
+                            id="inline-therapist-name-input"
+                          />
                           <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest block mt-1">
                             Registered Speech Therapist
                           </span>
@@ -1449,11 +1815,12 @@ export default function App() {
 
                   </div>
                 </div>
-
               </div>
 
             </div>
-          )}
+
+          </div>
+        )}
 
         </div>
 
