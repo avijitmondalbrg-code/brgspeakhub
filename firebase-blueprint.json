@@ -1,0 +1,99 @@
+{
+  "entities": {
+    "TherapyPlan": {
+      "title": "TherapyPlan",
+      "description": "Speech Therapy Plan clinical report created by a speech pathologist.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the plan."
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "User ID of the therapist who created the plan."
+        },
+        "patientName": {
+          "type": "string",
+          "description": "Name of the patient."
+        },
+        "age": {
+          "type": "string",
+          "description": "Age of the patient."
+        },
+        "gender": {
+          "type": "string",
+          "description": "Gender of the patient."
+        },
+        "date": {
+          "type": "string",
+          "format": "date",
+          "description": "Date of formulation."
+        },
+        "provisionalDiagnosis": {
+          "type": "string",
+          "description": "Provisional clinical diagnosis."
+        },
+        "presentConcerns": {
+          "type": "string",
+          "description": "Present concerns reported."
+        },
+        "assessmentFindings": {
+          "type": "string",
+          "description": "Clinical assessment findings."
+        },
+        "therapyPlan": {
+          "type": "array",
+          "description": "List of goals or actions in the therapy plan."
+        },
+        "adviceHomeProgram": {
+          "type": "string",
+          "description": "Advice and home-based programs."
+        },
+        "recommendations": {
+          "type": "string",
+          "description": "Other recommendations."
+        },
+        "frequencyOfTherapy": {
+          "type": "string",
+          "description": "Frequency of therapy sessions."
+        },
+        "reviewDate": {
+          "type": "string",
+          "format": "date",
+          "description": "Date for reviewing progress."
+        },
+        "therapistName": {
+          "type": "string",
+          "description": "Speech-Language Pathologist name."
+        },
+        "therapistSignature": {
+          "type": "string",
+          "description": "Pathologist's digital signature in base64 format."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last updated timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "patientName",
+        "date"
+      ]
+    }
+  },
+  "firestore": {
+    "/therapyPlans/{planId}": {
+      "schema": "TherapyPlan",
+      "description": "Collection of all speech therapy plans organized by unique plan ID."
+    }
+  }
+}

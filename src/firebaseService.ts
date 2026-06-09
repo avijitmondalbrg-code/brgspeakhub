@@ -1,0 +1,118 @@
+import {
+  collection,
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  deleteDoc,
+  query,
+  where,
+  orderBy,
+  serverTimestamp,
+  getDocFromServer
+} from 'firebase/firestore';
+import { db, auth } from './firebase';
+import { TherapyPlan, OperationType } from './types';
+import { handleFirestoreError } from './firebaseUtils';
+
+const COLLECTION_NAME = 'therapyPlans';
+
+export async function checkConnection(): Promise<boolean> {
+  try {
+    const testDoc = doc(db, 'test-connection-check', 'test');
+    await getDocFromServer(testDoc);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn("Firebase client is currently working offline.");
+      return false;
+    }
+    return true;
+  }
+}
+
+export async function saveTherapyPlan(plan: Omit<TherapyPlan, 'createdAt' | 'updatedAt'>, isNew: boolean): Promise<void> {
+  const path = `${COLLECTION_NAME}/${plan.id}`;
+  try {
+    const docRef = doc(db, COLLECTION_NAME, plan.id);
+    const payload: any = {
+      ...plan,
+      updatedAt: serverTimestamp()
+    };
+
+    if (isNew) {
+      payload.createdAt = serverTimestamp();
+    } else {
+      // Preserve original createdAt
+      const existingDoc = await getDoc(docRef);
+      if (existingDoc.exists()) {
+        payload.createdAt = existingDoc.data().createdAt || serverTimestamp();
+      } else {
+        payload.createdAt = serverTimestamp();
+      }
+    }
+
+    await setDoc(docRef, payload);
+  } catch (error) {
+    handleFirestoreError(error, isNew ? 'create' : 'update', path);
+  }
+}
+
+export async function getTherapyPlan(planId: string): Promise<TherapyPlan | null> {
+  const path = `${COLLECTION_NAME}/${planId}`;
+  try {
+    const docRef = doc(db, COLLECTION_NAME, planId);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return { id: docSnap.id, ...docSnap.data() } as TherapyPlan;
+    }
+    return null;
+  } catch (error) {
+    handleFirestoreError(error, 'get', path);
+    return null;
+  }
+}
+
+export async function deleteTherapyPlan(planId: string): Promise<void> {
+  const path = `${COLLECTION_NAME}/${planId}`;
+  try {
+    const docRef = doc(db, COLLECTION_NAME, planId);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, 'delete', path);
+  }
+}
+
+export async function getTherapyPlans(ownerId: string): Promise<TherapyPlan[]> {
+  try {
+    const q = query(
+      collection(db, COLLECTION_NAME),
+      where('ownerId', '==', ownerId),
+      orderBy('createdAt', 'desc')
+    );
+    const querySnapshot = await getDocs(q);
+    const plans: TherapyPlan[] = [];
+    querySnapshot.forEach((doc) => {
+      plans.push({ id: doc.id, ...doc.data() } as TherapyPlan);
+    });
+    return plans;
+  } catch (error) {
+    // If we get an index error or similar, fallback to client-side sorting to ensure the app works smoothly
+    try {
+      const qFallback = query(
+        collection(db, COLLECTION_NAME),
+        where('ownerId', '==', ownerId)
+      );
+      const querySnapshot = await getDocs(qFallback);
+      const plans: TherapyPlan[] = [];
+      querySnapshot.forEach((doc) => {
+        plans.push({ id: doc.id, ...doc.data() } as TherapyPlan);
+      });
+      // Sort in-memory descending by date/createdAt-like value
+      return plans.sort((a, b) => b.date.localeCompare(a.date));
+    } catch (fallbackError) {
+      handleFirestoreError(fallbackError, 'list', COLLECTION_NAME);
+      return [];
+    }
+  }
+}

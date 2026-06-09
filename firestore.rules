@@ -1,0 +1,61 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Catch-All Deny-by-Default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Helper Functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // 3. Validation helper for TherapyPlan entity
+    function isValidTherapyPlan(data) {
+      return data.patientName is string && data.patientName.size() > 0 && data.patientName.size() <= 200
+        && data.ownerId == request.auth.uid
+        && data.date is string && data.date.size() <= 30
+        && (!('age' in data) || (data.age is string && data.age.size() <= 30))
+        && (!('gender' in data) || (data.gender is string && data.gender.size() <= 30))
+        && (!('provisionalDiagnosis' in data) || (data.provisionalDiagnosis is string && data.provisionalDiagnosis.size() <= 2000))
+        && (!('presentConcerns' in data) || (data.presentConcerns is string && data.presentConcerns.size() <= 5000))
+        && (!('assessmentFindings' in data) || (data.assessmentFindings is string && data.assessmentFindings.size() <= 10000))
+        && (!('therapyPlan' in data) || (data.therapyPlan is list && data.therapyPlan.size() <= 50))
+        && (!('adviceHomeProgram' in data) || (data.adviceHomeProgram is string && data.adviceHomeProgram.size() <= 10000))
+        && (!('recommendations' in data) || (data.recommendations is string && data.recommendations.size() <= 10000))
+        && (!('frequencyOfTherapy' in data) || (data.frequencyOfTherapy is string && data.frequencyOfTherapy.size() <= 500))
+        && (!('reviewDate' in data) || (data.reviewDate is string && data.reviewDate.size() <= 30))
+        && (!('therapistName' in data) || (data.therapistName is string && data.therapistName.size() <= 200))
+        && (!('therapistSignature' in data) || (data.therapistSignature is string && data.therapistSignature.size() <= 500000)); // Signature Base64 string <= ~375KB
+    }
+
+    // 4. Therapy Plans collection matching rules
+    match /therapyPlans/{planId} {
+      allow get: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      allow create: if isSignedIn()
+        && isValidId(planId)
+        && isValidTherapyPlan(request.resource.data)
+        && request.resource.data.createdAt == request.time;
+
+      allow update: if isSignedIn()
+        && isValidId(planId)
+        && isValidTherapyPlan(request.resource.data)
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
+
+      allow delete: if isSignedIn()
+        && isValidId(planId)
+        && resource.data.ownerId == request.auth.uid;
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "BRG Speak HUB",
+  "description": "Clinical speech-language pathology assessment recorder, secure cloud synchronizer, and high-quality A4 PDF clinical report exporter with digital signature sketching.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
