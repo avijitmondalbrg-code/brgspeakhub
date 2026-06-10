@@ -20,6 +20,7 @@ const createEmptyPlan = (userId: string = 'local-user'): Omit<TherapyPlan, 'crea
   id: `plan_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
   ownerId: userId,
   patientName: '',
+  patientPhone: '',
   age: '',
   gender: '',
   date: new Date().toISOString().split('T')[0],
@@ -35,11 +36,110 @@ const createEmptyPlan = (userId: string = 'local-user'): Omit<TherapyPlan, 'crea
   therapistSignature: ''
 });
 
+// Reusable high-fidelity vector logo representing Bengal Rehabilitation Group (BRG)
+const BRGLogo = ({ className = "w-10 h-10" }: { className?: string }) => (
+  <svg className={`${className} shrink-0`} viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" id="svg-brg-logo">
+    <rect width="100" height="100" rx="22" fill="url(#brg-grad-3)" />
+    <path d="M28 50C28 37.8497 37.8497 28 50 28C62.1503 28 72 37.8497 72 50C72 62.1503 62.1503 72 50 72C37.8497 72 28 62.1503 28 50Z" fill="white" fillOpacity="0.08" />
+    <rect x="36" y="44" width="6" height="12" rx="3" fill="#ffffff" />
+    <rect x="45" y="32" width="6" height="36" rx="3" fill="#ffffff" />
+    <rect x="54" y="24" width="6" height="52" rx="3" fill="#38bdf8" />
+    <rect x="63" y="38" width="6" height="24" rx="3" fill="#e0f2fe" />
+    <rect x="72" y="46" width="5" height="8" rx="2.5" fill="#e0f2fe" fillOpacity="0.7" />
+    <path d="M22 58C28 68 45 74 58 71C71 68 78 55 78 50" stroke="white" strokeWidth="2.5" strokeLinecap="round" fill="none" fillOpacity="0.4" />
+    <defs>
+      <linearGradient id="brg-grad-3" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#1e3a8a" />
+        <stop offset="0.6" stopColor="#1d4ed8" />
+        <stop offset="1" stopColor="#0284c7" />
+      </linearGradient>
+    </defs>
+  </svg>
+);
+
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [plans, setPlans] = useState<TherapyPlan[]>([]);
   const [loadingPlans, setLoadingPlans] = useState(false);
+
+  // Custom persistent brand logo state & file picker ref
+  const [customLogo, setCustomLogo] = useState<string>(() => {
+    return localStorage.getItem('vocalis_custom_logo') || '';
+  });
+  const logoInputRef = useRef<HTMLInputElement>(null);
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        setNotification({
+          message: 'Logo size is too large. Please select an image under 2MB.',
+          type: 'error'
+        });
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result as string;
+        setCustomLogo(base64);
+        localStorage.setItem('vocalis_custom_logo', base64);
+        setNotification({
+          message: 'Your custom logo was uploaded and saved successfully!',
+          type: 'success'
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleLogoReset = () => {
+    setCustomLogo('');
+    localStorage.removeItem('vocalis_custom_logo');
+    setNotification({
+      message: 'Logo reset to default BRG branding.',
+      type: 'success'
+    });
+  };
+
+  // Reusable component that displays either the custom uploaded logo or the high-fidelity SVG
+  const AppLogo = ({ className = "w-10 h-10", allowUpload = false }: { className?: string; allowUpload?: boolean }) => {
+    const triggerUpload = (e: React.MouseEvent) => {
+      if (allowUpload) {
+        e.stopPropagation();
+        logoInputRef.current?.click();
+      }
+    };
+
+    if (customLogo) {
+      return (
+        <div className={`relative group shrink-0 ${allowUpload ? 'cursor-pointer' : ''}`} onClick={triggerUpload}>
+          <img
+            src={customLogo}
+            alt="Institution Logo"
+            className={`${className} object-contain bg-white shrink-0`}
+            referrerPolicy="no-referrer"
+          />
+          {allowUpload && (
+            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-center justify-center rounded text-[8px] font-bold text-white uppercase text-center tracking-wider leading-none p-1">
+              <span>Change</span>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className={`relative group shrink-0 ${allowUpload ? 'cursor-pointer' : ''}`} onClick={triggerUpload}>
+        <BRGLogo className={className} />
+        {allowUpload && (
+          <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-center justify-center rounded text-[10px] font-bold text-white uppercase text-center tracking-wider leading-none p-1">
+            <span>Edit</span>
+          </div>
+        )}
+      </div>
+    );
+  };
   
   // App views: 'dashboard' | 'form'
   const [view, setView] = useState<'dashboard' | 'form'>('dashboard');
@@ -54,6 +154,7 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+  const [autoPrintOnLoad, setAutoPrintOnLoad] = useState(false);
   
   // Paper Print Element Ref for high fidelity PDF convert
   const printAreaRef = useRef<HTMLDivElement>(null);
@@ -162,6 +263,17 @@ export default function App() {
     }
   }, [notification]);
 
+  // Auto print from history trigger
+  useEffect(() => {
+    if (view === 'form' && autoPrintOnLoad) {
+      const timer = setTimeout(() => {
+        printReport();
+        setAutoPrintOnLoad(false);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [view, autoPrintOnLoad]);
+
   // Auth logins
   const handleLogIn = async () => {
     try {
@@ -205,6 +317,13 @@ export default function App() {
     setCurrentPlan({ ...plan });
     setIsEditing(true);
     setView('form');
+  };
+
+  const triggerPrintFromHistory = (plan: TherapyPlan) => {
+    setCurrentPlan({ ...plan });
+    setIsEditing(false);
+    setView('form');
+    setAutoPrintOnLoad(true);
   };
 
   // Sync / save plan
@@ -717,17 +836,21 @@ export default function App() {
 
   return (
     <div className="flex bg-slate-100 font-sans text-slate-900 h-screen w-screen overflow-hidden" id="vocalis-app-root">
+      {/* Hidden file uploader for Branding Custom Logo */}
+      <input 
+        type="file" 
+        ref={logoInputRef} 
+        onChange={handleLogoUpload} 
+        accept="image/*" 
+        className="hidden" 
+        id="hidden-logo-uploader"
+      />
       
       {/* 1. PERSISTENT SIDEBAR PANEL (HIGH DENSITY BLUE) */}
       <aside className="w-64 bg-slate-900 text-white flex flex-col shrink-0 hidden md:flex border-r border-slate-800">
         <div className="p-5 border-b border-slate-800">
           <div className="flex items-center gap-3">
-            <img 
-              src="https://www.bengalrehabilitationgroup.com/images/brg_logo.png" 
-              alt="BRG Logo" 
-              className="w-10 h-10 object-contain bg-white rounded-lg p-1.5 shrink-0 shadow-sm"
-              referrerPolicy="no-referrer"
-            />
+            <AppLogo className="w-10 h-10 rounded-lg shadow-sm border border-slate-850" allowUpload />
             <div className="min-w-0">
               <h1 className="text-sm font-black tracking-tight uppercase leading-snug text-white truncate">
                 BRG Speak HUB
@@ -778,7 +901,41 @@ export default function App() {
             </div>
           )}
 
-          <div className="pt-6">
+          {/* Custom Branding/Logo Management Option */}
+          <div className="pt-4 border-t border-slate-850">
+            <div className="text-[10px] font-bold text-slate-550 uppercase tracking-widest px-3 mb-2 flex items-center justify-between">
+              <span>Institution Brand</span>
+              {customLogo && (
+                <button 
+                  type="button" 
+                  onClick={handleLogoReset}
+                  className="text-[9px] text-red-400 hover:text-red-300 capitalize underline focus:outline-none cursor-pointer"
+                  title="Remove uploaded logo"
+                >
+                  Reset Logo
+                </button>
+              )}
+            </div>
+            <div className="mx-2 p-2.5 bg-slate-850/60 rounded-lg flex flex-col gap-1.5 border border-slate-800/50">
+              <div className="flex items-center gap-2.5">
+                <AppLogo className="w-8 h-8 rounded bg-white shadow" allowUpload />
+                <div className="text-[10px] min-w-0 flex-1">
+                  <p className="font-semibold text-slate-300 truncate">
+                    {customLogo ? 'Your Custom Logo' : 'Default Logo'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => logoInputRef.current?.click()}
+                    className="text-blue-400 hover:text-blue-300 font-bold tracking-wider uppercase text-[8px] flex items-center gap-0.5 mt-0.5 transition cursor-pointer"
+                  >
+                    <Sparkles size={8} /> Upload Image
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4">
             <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-3 mb-2">Sync Status</div>
             <div className="mx-2 p-2.5 bg-slate-800/40 rounded-lg flex items-center gap-2 text-[10px] text-slate-450 border border-slate-800/80">
               <div className={`w-2 h-2 rounded-full shrink-0 ${user ? 'bg-emerald-500 shadow-xs' : 'bg-amber-400 animate-ping'}`} />
@@ -825,12 +982,7 @@ export default function App() {
             >
               <div className="p-5 border-b border-slate-800 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <img 
-                    src="https://www.bengalrehabilitationgroup.com/images/brg_logo.png" 
-                    alt="BRG Logo" 
-                    className="w-10 h-10 object-contain bg-white rounded-lg p-1.5 shrink-0" 
-                    referrerPolicy="no-referrer"
-                  />
+                  <AppLogo className="w-10 h-10 rounded-lg border border-slate-800" allowUpload />
                   <div className="min-w-0">
                     <h1 className="text-xs font-black tracking-tight leading-tight uppercase text-white truncate">
                       BRG Speak HUB
@@ -893,7 +1045,43 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="pt-6">
+                {/* Mobile custom branding controller */}
+                <div className="pt-4 border-t border-slate-850">
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-3 mb-2 flex items-center justify-between">
+                    <span>Institution Brand</span>
+                    {customLogo && (
+                      <button 
+                        type="button" 
+                        onClick={handleLogoReset}
+                        className="text-[9px] text-red-400 hover:text-red-300 capitalize underline focus:outline-none cursor-pointer"
+                      >
+                        Reset Logo
+                      </button>
+                    )}
+                  </div>
+                  <div className="mx-2 p-2.5 bg-slate-850/60 rounded-lg flex flex-col gap-1.5 border border-slate-800/50">
+                    <div className="flex items-center gap-2.5 font-sans">
+                      <AppLogo className="w-8 h-8 rounded bg-white shadow-sm" allowUpload />
+                      <div className="text-[10px] min-w-0">
+                        <p className="font-semibold text-slate-300 truncate">
+                          {customLogo ? 'Your Custom Logo' : 'Default Logo'}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMobileMenuOpen(false);
+                            setTimeout(() => logoInputRef.current?.click(), 300);
+                          }}
+                          className="text-blue-400 hover:text-blue-300 font-bold tracking-wider uppercase text-[8px] flex items-center gap-0.5 mt-0.5 transition cursor-pointer"
+                        >
+                          <Sparkles size={8} /> Change Logo
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4">
                   <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-3 mb-2">Sync Status</div>
                   <div className="mx-2 p-2.5 bg-slate-800/40 rounded-lg flex items-center gap-2 text-[10px] text-slate-400 border border-slate-800/60">
                     <div className={`w-2 h-2 rounded-full shrink-0 ${user ? 'bg-emerald-500 shadow-xs' : 'bg-amber-400 animate-ping'}`} />
@@ -938,12 +1126,7 @@ export default function App() {
             </button>
 
             <div className="md:hidden flex items-center gap-2">
-              <img 
-                src="https://www.bengalrehabilitationgroup.com/images/brg_logo.png" 
-                alt="BRG Logo" 
-                className="w-8 h-8 object-contain bg-slate-50 border border-slate-200 rounded p-1 shrink-0" 
-                referrerPolicy="no-referrer"
-              />
+              <AppLogo className="w-8 h-8 rounded cursor-pointer duration-300" allowUpload />
               <span className="text-xs sm:text-sm font-extrabold text-slate-900 tracking-tight whitespace-nowrap">BRG Speak HUB</span>
             </div>
             
@@ -1232,6 +1415,16 @@ export default function App() {
                           <div className="flex items-center gap-1.5">
                             <button
                               type="button"
+                              onClick={() => triggerPrintFromHistory(plan)}
+                              className="p-1.5 text-slate-500 hover:text-emerald-600 bg-white border border-slate-200 rounded hover:border-emerald-200 cursor-pointer transition shadow-xs"
+                              title="Print Report"
+                              id={`btn-print-hist-${plan.id}`}
+                            >
+                              <Printer size={11} />
+                            </button>
+
+                            <button
+                              type="button"
                               onClick={() => triggerEdit(plan)}
                               className="p-1.5 text-slate-500 hover:text-blue-600 bg-white border border-slate-200 rounded hover:border-blue-200 cursor-pointer transition shadow-xs"
                               title="Edit Plan"
@@ -1362,6 +1555,21 @@ export default function App() {
                         />
                       </div>
 
+                      {/* Phone Number */}
+                      <div className="md:col-span-2 space-y-1">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                          Patient Phone Number
+                        </label>
+                        <input
+                          type="tel"
+                          placeholder="e.g. +91 98765 43210"
+                          value={currentPlan.patientPhone || ''}
+                          onChange={(e) => handleFormChange('patientPhone', e.target.value)}
+                          className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          id="input-pt-phone"
+                        />
+                      </div>
+
                       {/* Age */}
                       <div className="space-y-1">
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
@@ -1393,7 +1601,7 @@ export default function App() {
                       </div>
 
                       {/* Date */}
-                      <div className="md:col-span-2 space-y-1">
+                      <div className="space-y-1">
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                           Evaluation Date
                         </label>
@@ -1407,7 +1615,7 @@ export default function App() {
                       </div>
 
                       {/* Review Date */}
-                      <div className="md:col-span-2 space-y-1">
+                      <div className="space-y-1">
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                           Review Date
                         </label>
@@ -1671,13 +1879,7 @@ export default function App() {
                         {/* Letterhead */}
                         <div className="border-b-2 border-blue-600 pb-3 flex justify-between items-center">
                           <div className="flex items-center gap-3">
-                            <img 
-                              src="https://www.bengalrehabilitationgroup.com/images/brg_logo.png" 
-                              alt="BRG Logo" 
-                              className="w-10 h-10 object-contain bg-white rounded p-1 shrink-0 bg-slate-50 border border-slate-105"
-                              referrerPolicy="no-referrer"
-                              crossOrigin="anonymous"
-                            />
+                            <AppLogo className="w-10 h-10 rounded border border-slate-150 shadow-sm" allowUpload />
                           <div>
                             <h2 className="text-sm font-extrabold tracking-tight text-slate-950 uppercase leading-none">BRG Speak HUB</h2>
                             <p className="text-[8px] text-slate-400 font-bold uppercase tracking-wider mt-1">Bengal Rehabilitation Group • Clinical Speech Assessment</p>
@@ -1691,10 +1893,14 @@ export default function App() {
                       </div>
 
                       {/* Info grid */}
-                      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 bg-slate-50 p-3 rounded-lg border border-slate-100/80">
+                      <div className="grid grid-cols-3 gap-x-4 gap-y-2 bg-slate-50 p-3 rounded-lg border border-slate-100/80">
                         <div>
                           <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Patient Name</span>
                           <span className="text-xs font-bold text-slate-900 capitalize mt-0.5 block">{currentPlan.patientName || '_________________'}</span>
+                        </div>
+                        <div>
+                          <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Patient Phone</span>
+                          <span className="text-[11px] font-semibold text-slate-800 mt-0.5 block">{currentPlan.patientPhone || '_________________'}</span>
                         </div>
                         <div>
                           <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Evaluation Date</span>
@@ -1706,7 +1912,7 @@ export default function App() {
                             {currentPlan.age ? `${currentPlan.age}` : '_____'} / {currentPlan.gender || '_____'}
                           </span>
                         </div>
-                        <div>
+                        <div className="col-span-2">
                           <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Planned Review</span>
                           <span className="text-[11px] font-semibold text-slate-800 mt-0.5 block">{currentPlan.reviewDate || '_________________'}</span>
                         </div>

@@ -2,6 +2,7 @@ export interface TherapyPlan {
   id: string;
   ownerId: string;
   patientName: string;
+  patientPhone?: string;
   age: string;
   gender: string;
   date: string; // formulation date (YYYY-MM-DD)
