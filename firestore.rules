@@ -57,5 +57,10 @@ service cloud.firestore {
         && isValidId(planId)
         && resource.data.ownerId == request.auth.uid;
     }
+
+    // 5. User Settings collection matching rules
+    match /userSettings/{uid} {
+      allow get, write: if isSignedIn() && uid == request.auth.uid;
+    }
   }
 }

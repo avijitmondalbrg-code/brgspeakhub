@@ -12,7 +12,7 @@ import {
   getDocFromServer
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
-import { TherapyPlan, OperationType } from './types';
+import { TherapyPlan, OperationType, WhatsAppSettings } from './types';
 import { handleFirestoreError } from './firebaseUtils';
 
 const COLLECTION_NAME = 'therapyPlans';
@@ -114,5 +114,30 @@ export async function getTherapyPlans(ownerId: string): Promise<TherapyPlan[]> {
       handleFirestoreError(fallbackError, 'list', COLLECTION_NAME);
       return [];
     }
+  }
+}
+
+export async function saveWhatsAppSettings(uid: string, settings: WhatsAppSettings): Promise<void> {
+  const path = `userSettings/${uid}`;
+  try {
+    const docRef = doc(db, 'userSettings', uid);
+    await setDoc(docRef, { whatsappSettings: settings }, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, 'write', path);
+  }
+}
+
+export async function getWhatsAppSettings(uid: string): Promise<WhatsAppSettings | null> {
+  const path = `userSettings/${uid}`;
+  try {
+    const docRef = doc(db, 'userSettings', uid);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists() && docSnap.data().whatsappSettings) {
+      return docSnap.data().whatsappSettings as WhatsAppSettings;
+    }
+    return null;
+  } catch (error) {
+    handleFirestoreError(error, 'get', path);
+    return null;
   }
 }

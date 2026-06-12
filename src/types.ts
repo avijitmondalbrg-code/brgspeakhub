@@ -22,6 +22,14 @@ export interface TherapyPlan {
 
 export type OperationType = 'create' | 'update' | 'delete' | 'list' | 'get' | 'write';
 
+export interface WhatsAppSettings {
+  accessToken: string;
+  phoneNumberId: string;
+  businessAccountId: string;
+  templateName?: string;
+  langCode?: string;
+}
+
 export interface FirestoreErrorInfo {
   error: string;
   operationType: OperationType;

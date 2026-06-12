@@ -3,13 +3,13 @@ import {
   FileText, Plus, Search, Trash2, Edit3, Save, ArrowLeft, Download, 
   Printer, CheckCircle2, AlertCircle, Calendar, User, Activity, Sparkles, 
   LogIn, LogOut, Cloud, CloudOff, RefreshCw, FileSignature, Layers, 
-  ChevronRight, HelpCircle, FileCheck, Check, Info, Menu, X
+  ChevronRight, HelpCircle, FileCheck, Check, Info, Menu, X, MessageSquare, Settings
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { auth, googleProvider, signInWithPopup } from './firebase';
 import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
-import { TherapyPlan } from './types';
-import { saveTherapyPlan, deleteTherapyPlan, getTherapyPlans } from './firebaseService';
+import { TherapyPlan, WhatsAppSettings } from './types';
+import { saveTherapyPlan, deleteTherapyPlan, getTherapyPlans, saveWhatsAppSettings, getWhatsAppSettings } from './firebaseService';
 import SignaturePad from './components/SignaturePad';
 import { CLINICAL_TEMPLATES } from './clinicalTemplates';
 import html2canvas from 'html2canvas';
@@ -148,6 +148,18 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // WhatsApp settings and modals
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
+  const [showAccessToken, setShowAccessToken] = useState(false);
+  const [isSendingWhatsApp, setIsSendingWhatsApp] = useState<string | null>(null);
+  const [whatsappSettings, setWhatsappSettings] = useState<WhatsAppSettings>({
+    accessToken: localStorage.getItem('slp_wa_access_token') || '',
+    phoneNumberId: localStorage.getItem('slp_wa_phone_number_id') || '1193795173813206',
+    businessAccountId: localStorage.getItem('slp_wa_business_account_id') || '995786956257682',
+    templateName: localStorage.getItem('slp_wa_template_name') || 'hello_world',
+    langCode: localStorage.getItem('slp_wa_lang_code') || 'en_US'
+  });
   
   // Status notifications
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -155,6 +167,7 @@ export default function App() {
   const [isExporting, setIsExporting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [autoPrintOnLoad, setAutoPrintOnLoad] = useState(false);
+  const [autoWhatsAppOnLoad, setAutoWhatsAppOnLoad] = useState(false);
   
   // Paper Print Element Ref for high fidelity PDF convert
   const printAreaRef = useRef<HTMLDivElement>(null);
@@ -219,6 +232,58 @@ export default function App() {
     loadPlans();
   }, [user]);
 
+  // Sync WhatsApp settings on user state update
+  useEffect(() => {
+    const fetchWhatsAppSettings = async () => {
+      if (user) {
+        try {
+          const cloudSettings = await getWhatsAppSettings(user.uid);
+          if (cloudSettings) {
+            setWhatsappSettings(cloudSettings);
+            if (cloudSettings.accessToken) localStorage.setItem('slp_wa_access_token', cloudSettings.accessToken);
+            if (cloudSettings.phoneNumberId) localStorage.setItem('slp_wa_phone_number_id', cloudSettings.phoneNumberId);
+            if (cloudSettings.businessAccountId) localStorage.setItem('slp_wa_business_account_id', cloudSettings.businessAccountId);
+            if (cloudSettings.templateName) localStorage.setItem('slp_wa_template_name', cloudSettings.templateName);
+            if (cloudSettings.langCode) localStorage.setItem('slp_wa_lang_code', cloudSettings.langCode);
+          }
+        } catch (err) {
+          console.error("Could not load WhatsApp configurations from Firestore:", err);
+        }
+      }
+    };
+    fetchWhatsAppSettings();
+  }, [user]);
+
+  const handleSaveWhatsAppSettings = async (settings: WhatsAppSettings) => {
+    setWhatsappSettings(settings);
+    localStorage.setItem('slp_wa_access_token', settings.accessToken);
+    localStorage.setItem('slp_wa_phone_number_id', settings.phoneNumberId);
+    localStorage.setItem('slp_wa_business_account_id', settings.businessAccountId);
+    localStorage.setItem('slp_wa_template_name', settings.templateName || 'hello_world');
+    localStorage.setItem('slp_wa_lang_code', settings.langCode || 'en_US');
+
+    if (user) {
+      try {
+        await saveWhatsAppSettings(user.uid, settings);
+        setNotification({
+          message: 'WhatsApp automated parameters saved & synced with your online account!',
+          type: 'success'
+        });
+      } catch (err) {
+        setNotification({
+          message: 'Saved changes locally, online cloud synchronization failed.',
+          type: 'info'
+        });
+      }
+    } else {
+      setNotification({
+        message: 'WhatsApp parameters saved locally on this browser!',
+        type: 'success'
+      });
+    }
+    setShowWhatsAppModal(false);
+  };
+
   const loadPlans = async () => {
     setLoadingPlans(true);
     if (user) {
@@ -273,6 +338,17 @@ export default function App() {
       return () => clearTimeout(timer);
     }
   }, [view, autoPrintOnLoad]);
+
+  // Auto WhatsApp background dispatcher from history trigger
+  useEffect(() => {
+    if (view === 'form' && autoWhatsAppOnLoad && currentPlan) {
+      const timer = setTimeout(() => {
+        sendPDFToWhatsApp(currentPlan as TherapyPlan);
+        setAutoWhatsAppOnLoad(false);
+      }, 650);
+      return () => clearTimeout(timer);
+    }
+  }, [view, autoWhatsAppOnLoad, currentPlan]);
 
   // Auth logins
   const handleLogIn = async () => {
@@ -469,6 +545,407 @@ export default function App() {
       ...currentPlan,
       therapyPlan: updatedGoals.length > 0 ? updatedGoals : ['']
     });
+  };
+
+  // WhatsApp automatic sender and delivery pipeline
+  const sendPDFToWhatsApp = async (plan: TherapyPlan) => {
+    setIsSendingWhatsApp(plan.id);
+    setNotification({
+      message: `Formulating clinical report PDF for patient "${plan.patientName}"...`,
+      type: 'info'
+    });
+
+    // Helper to translate OKLCH and OKLAB color formats back to safe equivalents (HSL/RGB)
+    const approximateOklchToHsl = (cssText: string): string => {
+      if (!cssText) return cssText;
+      
+      // Replace oklch() with equivalent hsl()
+      let result = cssText.replace(
+        /oklch\(\s*([0-9.]+%?)\s+([0-9.]+%?)\s+([0-9.]+%?|\w+)(?:\s*\/\s*([0-9.]+%?))?\s*\)/g,
+        (_, lStr, cStr, hStr, aStr) => {
+          try {
+            let l = parseFloat(lStr);
+            if (lStr.includes('%')) l = l / 100;
+            let c = parseFloat(cStr);
+            if (cStr.includes('%')) c = c / 100;
+            let h = parseFloat(hStr);
+            if (isNaN(h)) h = 0;
+            
+            // Saturation proxy: C * 250% (capped at 100%)
+            const s = Math.min(100, Math.max(0, c * 250));
+            const lPct = Math.min(100, Math.max(0, l * 100));
+            
+            if (aStr !== undefined) {
+              return `hsla(${h.toFixed(1)}, ${s.toFixed(1)}%, ${lPct.toFixed(1)}%, ${aStr})`;
+            } else {
+              return `hsl(${h.toFixed(1)}, ${s.toFixed(1)}%, ${lPct.toFixed(1)}%)`;
+            }
+          } catch {
+            return '#888888';
+          }
+        }
+      );
+
+      // Replace oklab() with equivalent rgb() 
+      result = result.replace(
+        /oklab\(\s*([0-9.]+%?)\s+([0-9.-]+%?)\s+([0-9.-]+%?)(?:\s*\/\s*([0-9.]+%?))?\s*\)/g,
+        (_, lStr, __, ___, alphaStr) => {
+          try {
+            let l = parseFloat(lStr);
+            if (lStr.includes('%')) l = l / 100;
+            const grayVal = Math.round(l * 255);
+            if (alphaStr !== undefined) {
+              return `rgba(${grayVal}, ${grayVal}, ${grayVal}, ${alphaStr})`;
+            } else {
+              return `rgb(${grayVal}, ${grayVal}, ${grayVal})`;
+            }
+          } catch {
+            return '#888888';
+          }
+        }
+      );
+
+      return result;
+    };
+
+    // 1. BACKUP & CLEAN ELEMENT STYLE TEXT IN DOM STYLETAGS
+    const styleElements = Array.from(document.querySelectorAll('style'));
+    const styleBackups: Array<{ element: HTMLStyleElement; originalText: string }> = [];
+    
+    try {
+      for (const styleElt of styleElements) {
+        const text = styleElt.textContent || '';
+        if (text.includes('oklch') || text.includes('oklab')) {
+          styleBackups.push({ element: styleElt, originalText: text });
+          styleElt.textContent = approximateOklchToHsl(text);
+        }
+      }
+    } catch (err) {
+      console.warn('Could not rewrite some custom styles text:', err);
+    }
+
+    // 2. STYLESHEET CSSOM SUB-RULES CLEANING WORKAROUND
+    const stylesBackup: Array<{
+      sheet: CSSStyleSheet;
+      rules: Array<{ index: number; cssText: string }>;
+    }> = [];
+
+    try {
+      for (let i = 0; i < document.styleSheets.length; i++) {
+        try {
+          const sheet = document.styleSheets[i];
+          const rules = sheet.cssRules || sheet.rules;
+          if (!rules) continue;
+          
+          const ruleBackup: Array<{ index: number; cssText: string }> = [];
+          for (let j = rules.length - 1; j >= 0; j--) {
+            const rule = rules[j];
+            if (rule && rule.cssText && (rule.cssText.includes('oklch') || rule.cssText.includes('oklab'))) {
+              ruleBackup.push({ index: j, cssText: rule.cssText });
+              sheet.deleteRule(j);
+            }
+          }
+          
+          if (ruleBackup.length > 0) {
+            ruleBackup.sort((a, b) => a.index - b.index);
+            stylesBackup.push({ sheet, rules: ruleBackup });
+          }
+        } catch (e) {
+          // Ignore cross-origin access errors
+          console.warn('Could not process some stylesheet rules:', e);
+        }
+      }
+    } catch (globalE) {
+      console.error('Error pre-filtering style rules:', globalE);
+    }
+
+    // 3. SECURE BROWSER COMPUTED STYLES INTERCEPTOR
+    const originalGetComputedStyle = window.getComputedStyle;
+    try {
+      (window as any).getComputedStyle = function (elt: Element, pseudoElt?: string | null): CSSStyleDeclaration {
+        const style = originalGetComputedStyle.call(window, elt, pseudoElt);
+        return new Proxy(style, {
+          get(target, prop) {
+            // Avoid passing the receiver (Proxy) which causes "Illegal invocation" for native getters
+            const val = Reflect.get(target, prop);
+            if (typeof val === 'function') {
+              return function(this: any, ...args: any[]) {
+                const res = val.apply(target, args);
+                if (typeof res === 'string' && (res.includes('oklch') || res.includes('oklab'))) {
+                  return approximateOklchToHsl(res);
+                }
+                return res;
+              };
+            }
+            if (typeof val === 'string' && (val.includes('oklch') || val.includes('oklab'))) {
+              return approximateOklchToHsl(val);
+            }
+            return val;
+          }
+        });
+      };
+    } catch (proxyError) {
+      console.error('Could not set up window.getComputedStyle interceptor proxy:', proxyError);
+    }
+
+    try {
+      const element = document.getElementById('clinical-report-paper');
+      if (!element) {
+        throw new Error('Clinical report printable viewport not found in active screen.');
+      }
+
+      // Pre-load and decode images for clean presentation in rendering canvas
+      const documentImages = Array.from(element.querySelectorAll('img'));
+      await Promise.all(
+        documentImages.map((img) => {
+          if (img.complete) {
+            return img.decode ? img.decode().catch(() => {}) : Promise.resolve();
+          }
+          return new Promise<void>((resolve) => {
+            img.onload = () => {
+              if (img.decode) {
+                img.decode().then(resolve).catch(() => resolve());
+              } else {
+                resolve();
+              }
+            };
+            img.onerror = () => resolve();
+          });
+        })
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 350));
+
+      const opt = {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        logging: false
+      };
+
+      const canvas = await html2canvas(element, opt);
+      const imgData = canvas.toDataURL('image/png');
+      
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const imgWidth = 210;
+      const pageHeight = 297;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      const pdfBlob = pdf.output('blob');
+      const fileName = `SLP_Report_${plan.patientName.replace(/\s+/g, '_') || 'Patient'}_${plan.date}.pdf`;
+      const pdfFile = new File([pdfBlob], fileName, { type: 'application/pdf' });
+
+      setNotification({
+        message: 'Uploading document secure payload to Meta WhatsApp Cloud API server...',
+        type: 'info'
+      });
+
+      const mediaFormData = new FormData();
+      mediaFormData.append('messaging_product', 'whatsapp');
+      mediaFormData.append('file', pdfFile);
+      mediaFormData.append('type', 'application/pdf');
+
+      const uploadRes = await fetch(`https://graph.facebook.com/v20.0/${whatsappSettings.phoneNumberId}/media`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${whatsappSettings.accessToken}`
+        },
+        body: mediaFormData
+      });
+
+      if (!uploadRes.ok) {
+        const errorData = await uploadRes.json();
+        throw new Error(errorData.error?.message || 'Meta API Media Upload did not respond successfully.');
+      }
+
+      const uploadData = await uploadRes.json();
+      const mediaId = uploadData.id;
+
+      if (!mediaId) {
+        throw new Error('No media ID retrieved from Facebook Graph Servers.');
+      }
+
+      setNotification({
+        message: 'Report uploaded. Delivering automated direct WhatsApp to patient...',
+        type: 'info'
+      });
+
+      const sanitizedPhone = plan.patientPhone ? plan.patientPhone.replace(/\D/g, '') : '';
+      if (!sanitizedPhone) {
+        throw new Error('Valid patient phone number is missing.');
+      }
+
+      const messagePayload = {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: sanitizedPhone,
+        type: "document",
+        document: {
+          id: mediaId,
+          filename: fileName,
+          caption: `Hello, here is your Speech-Language Pathology Clinical Report formulated on ${plan.date}.`
+        }
+      };
+
+      const sendRes = await fetch(`https://graph.facebook.com/v20.0/${whatsappSettings.phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${whatsappSettings.accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(messagePayload)
+      });
+
+      if (!sendRes.ok) {
+        const sendError = await sendRes.json();
+        const code = sendError.error?.code;
+        const msg = sendError.error?.message;
+        
+        // Active window error fallback
+        if (code === 131030 || (msg && msg.toLowerCase().includes('window'))) {
+          setNotification({
+            message: 'Active conversation window not open. Dispatching standard approved template notification...',
+            type: 'info'
+          });
+
+          const templatePayload = {
+            messaging_product: "whatsapp",
+            to: sanitizedPhone,
+            type: "template",
+            template: {
+              name: whatsappSettings.templateName || "hello_world",
+              language: {
+                code: whatsappSettings.langCode || "en_US"
+              }
+            }
+          };
+
+          const fallbackRes = await fetch(`https://graph.facebook.com/v20.0/${whatsappSettings.phoneNumberId}/messages`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${whatsappSettings.accessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(templatePayload)
+          });
+
+          if (!fallbackRes.ok) {
+            const fallbackErrorData = await fallbackRes.json();
+            throw new Error(`Failed to send WhatsApp warning alert. Meta API replied: ${fallbackErrorData.error?.message}`);
+          }
+
+          setNotification({
+            message: `Template notification dispatched to "${plan.patientName}" on WhatsApp perfectly! (Could not attach document as no active 24-hour chat window exists yet)`,
+            type: 'success'
+          });
+        } else {
+          throw new Error(msg || 'Meta Messages endpoint returned an error.');
+        }
+      } else {
+        setNotification({
+          message: `Direct PDF report successfully delivered to "${plan.patientName}" on WhatsApp, completely in the background!`,
+          type: 'success'
+        });
+      }
+
+    } catch (err: any) {
+      console.error(err);
+      setNotification({
+        message: `WhatsApp dispatcher failed: ${err.message || 'Meta API error'}`,
+        type: 'error'
+      });
+    } finally {
+      // 4. RESTORE ALL STYLE MECHANICS TRANSPARENTLY
+      try {
+        (window as any).getComputedStyle = originalGetComputedStyle;
+      } catch (e) {
+        console.error('Could not restore getComputedStyle:', e);
+      }
+
+      for (const backup of styleBackups) {
+        try {
+          backup.element.textContent = backup.originalText;
+        } catch (e) {
+          console.warn('Could not restore style tag content:', e);
+        }
+      }
+
+      for (const backup of stylesBackup) {
+        const { sheet, rules } = backup;
+        for (const rule of rules) {
+          try {
+            sheet.insertRule(rule.cssText, rule.index);
+          } catch (restoreError) {
+            try {
+              sheet.insertRule(rule.cssText, sheet.cssRules.length);
+            } catch (fallbackError) {
+              console.warn('Failed to restore custom rule:', rule.cssText, fallbackError);
+            }
+          }
+        }
+      }
+      setIsSendingWhatsApp(null);
+    }
+  };
+
+  const triggerWhatsAppFromHistory = (plan: TherapyPlan) => {
+    if (!whatsappSettings.accessToken) {
+      setCurrentPlan({ ...plan });
+      setShowWhatsAppModal(true);
+      setNotification({
+        message: 'Please click the WhatsApp configurations first to key in your credentials!',
+        type: 'info'
+      });
+      return;
+    }
+
+    if (!plan.patientPhone || !plan.patientPhone.trim()) {
+      setNotification({
+        message: `Patient "${plan.patientName}" has no designated phone number. Add it by editing the record.`,
+        type: 'error'
+      });
+      return;
+    }
+
+    setCurrentPlan({ ...plan });
+    setIsEditing(false);
+    setView('form');
+    setAutoWhatsAppOnLoad(true);
+  };
+
+  const triggerWhatsAppDirect = async () => {
+    if (!currentPlan) return;
+    if (!whatsappSettings.accessToken) {
+      setShowWhatsAppModal(true);
+      setNotification({
+        message: 'Please click the WhatsApp configurations first to key in your credentials!',
+        type: 'info'
+      });
+      return;
+    }
+
+    if (!currentPlan.patientPhone || !currentPlan.patientPhone.trim()) {
+      setNotification({
+        message: 'Please add a patient phone number in the form first!',
+        type: 'error'
+      });
+      return;
+    }
+
+    await sendPDFToWhatsApp(currentPlan as TherapyPlan);
   };
 
   // Export PDF Generator
@@ -1145,6 +1622,18 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* WhatsApp Integration Parameters */}
+            <button
+              type="button"
+              onClick={() => setShowWhatsAppModal(true)}
+              className="p-1.5 px-2 border border-slate-200 rounded-lg text-slate-500 hover:text-emerald-600 bg-white hover:bg-slate-50 flex items-center gap-1.5 transition-all shadow-xs cursor-pointer h-8"
+              title="Configure WhatsApp Business API"
+              id="h-btn-wa-settings"
+            >
+              <Settings size={13} className="text-slate-400 group-hover:text-emerald-500" />
+              <span className="hidden sm:inline text-[11px] font-bold text-slate-600">Sync WhatsApp</span>
+            </button>
+
             {/* Quick Actions if working on a form */}
             {view === 'form' && currentPlan && (
               <div className="flex gap-2 mr-2">
@@ -1413,6 +1902,25 @@ export default function App() {
                           </span>
 
                           <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => triggerWhatsAppFromHistory(plan)}
+                              className={`p-1.5 border rounded cursor-pointer transition shadow-xs ${
+                                isSendingWhatsApp === plan.id
+                                  ? "text-emerald-600 border-emerald-200 bg-emerald-50"
+                                  : "text-slate-500 hover:text-emerald-600 bg-white border-slate-200 hover:border-emerald-200"
+                              }`}
+                              title="Send via WhatsApp Business API"
+                              id={`btn-wa-hist-${plan.id}`}
+                              disabled={isSendingWhatsApp === plan.id}
+                            >
+                              {isSendingWhatsApp === plan.id ? (
+                                <RefreshCw size={11} className="animate-spin" />
+                              ) : (
+                                <MessageSquare size={11} />
+                              )}
+                            </button>
+
                             <button
                               type="button"
                               onClick={() => triggerPrintFromHistory(plan)}
@@ -1834,6 +2342,20 @@ export default function App() {
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
+                      onClick={triggerWhatsAppDirect}
+                      disabled={isSendingWhatsApp === currentPlan?.id}
+                      className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] rounded-md cursor-pointer transition-all flex items-center gap-1 shrink-0 disabled:opacity-50"
+                      id="btn-active-wa-send"
+                    >
+                      {isSendingWhatsApp === currentPlan?.id ? (
+                        <RefreshCw size={11} className="animate-spin" />
+                      ) : (
+                        <MessageSquare size={11} />
+                      )}
+                      <span>Send WA</span>
+                    </button>
+                    <button
+                      type="button"
                       onClick={printReport}
                       className="py-1 px-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-[10px] rounded-md cursor-pointer transition-all flex items-center gap-1 shrink-0"
                       id="btn-print-report"
@@ -1907,7 +2429,7 @@ export default function App() {
                           <span className="text-[11px] font-semibold text-slate-800 mt-0.5 block">{currentPlan.date || '_________________'}</span>
                         </div>
                         <div>
-                          <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Age / Gender</span>
+                          <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Age </span>
                           <span className="text-[11px] font-semibold text-slate-800 mt-0.5 block">
                             {currentPlan.age ? `${currentPlan.age}` : '_____'} / {currentPlan.gender || '_____'}
                           </span>
@@ -2046,6 +2568,156 @@ export default function App() {
         </footer>
 
       </main>
+
+      {/* WHATSAPP CUSTOM INTEGRATION DRAWER MODAL */}
+      <AnimatePresence>
+        {showWhatsAppModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className="bg-white border border-slate-200 rounded-2xl shadow-xl w-full max-w-md overflow-hidden"
+            >
+              {/* Header */}
+              <div className="bg-slate-950 text-white p-5 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <MessageSquare size={16} className="text-emerald-400" />
+                  <div>
+                    <h3 className="font-bold text-[13px] tracking-tight">WhatsApp API Sync Panel</h3>
+                    <p className="text-[10px] text-slate-400 font-semibold">Meta Developer Business Cloud Integration</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowWhatsAppModal(false)}
+                  className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition cursor-pointer"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+
+              {/* Form Fields container */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const formData = new FormData(e.currentTarget);
+                  handleSaveWhatsAppSettings({
+                    accessToken: (formData.get('accessToken') as string || '').trim(),
+                    phoneNumberId: (formData.get('phoneNumberId') as string || '').trim(),
+                    businessAccountId: (formData.get('businessAccountId') as string || '').trim(),
+                    templateName: (formData.get('templateName') as string || '').trim() || 'hello_world',
+                    langCode: (formData.get('langCode') as string || '').trim() || 'en_US'
+                  });
+                }}
+                className="p-5 space-y-4"
+              >
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 flex justify-between items-center">
+                    <span>Meta Access Token (EAAB...)</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowAccessToken(!showAccessToken)}
+                      className="text-[9px] font-bold text-blue-600 hover:underline cursor-pointer"
+                    >
+                      {showAccessToken ? "Hide Secret" : "Show Secret"}
+                    </button>
+                  </label>
+                  <input
+                    type={showAccessToken ? "text" : "password"}
+                    name="accessToken"
+                    defaultValue={whatsappSettings.accessToken}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-emerald-500 focus:bg-white transition"
+                    placeholder="Enter access token from developers.facebook.com"
+                    required
+                  />
+                  <p className="text-[9px] text-slate-400 mt-1 leading-relaxed leading-[1.3]">
+                    To retain persistence and send messages seamlessly, copy the temporary and/or permanent token from your Meta App Console.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                      Phone Number ID
+                    </label>
+                    <input
+                      type="text"
+                      name="phoneNumberId"
+                      defaultValue={whatsappSettings.phoneNumberId}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 focus:bg-white transition"
+                      placeholder="e.g., 1193795173813206"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                      Business Account ID
+                    </label>
+                    <input
+                      type="text"
+                      name="businessAccountId"
+                      defaultValue={whatsappSettings.businessAccountId}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 focus:bg-white transition"
+                      placeholder="e.g., 995786956257682"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-150 pt-3.5 mt-3.5 space-y-3">
+                  <h5 className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Fallback Notification Settings</h5>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Template Name
+                      </label>
+                      <input
+                        type="text"
+                        name="templateName"
+                        defaultValue={whatsappSettings.templateName}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-emerald-500 focus:bg-white transition"
+                        placeholder="hello_world"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Language Code
+                      </label>
+                      <input
+                        type="text"
+                        name="langCode"
+                        defaultValue={whatsappSettings.langCode}
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-emerald-500 focus:bg-white transition"
+                        placeholder="en_US"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[9px] text-slate-400 mt-1 leading-[1.3]">
+                    Template name and languages are triggered as fallback automatically if the active 24h window constraint is hit. Default template approved by Meta is <strong>hello_world</strong>.
+                  </p>
+                </div>
+
+                <div className="bg-slate-50 px-5 py-3.5 border-t border-slate-100 flex items-center justify-end gap-2.5 -mx-5 -mb-5 bg-slate-50/80">
+                  <button
+                    type="button"
+                    onClick={() => setShowWhatsAppModal(false)}
+                    className="px-3 py-1.5 text-xs font-semibold text-slate-500 hover:text-slate-800 transition cursor-pointer"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition shadow-xs cursor-pointer"
+                  >
+                    Save & Sync State
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

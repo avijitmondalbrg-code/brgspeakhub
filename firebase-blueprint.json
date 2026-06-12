@@ -94,6 +94,19 @@
     "/therapyPlans/{planId}": {
       "schema": "TherapyPlan",
       "description": "Collection of all speech therapy plans organized by unique plan ID."
+    },
+    "/userSettings/{uid}": {
+      "schema": {
+        "title": "UserSettings",
+        "description": "Settings and configurations for individual users, e.g. WhatsApp keys",
+        "type": "object",
+        "properties": {
+          "whatsappSettings": {
+            "type": "object"
+          }
+        }
+      },
+      "description": "Collection of therapist custom parameters including integrated WhatsApp accounts."
     }
   }
 }
