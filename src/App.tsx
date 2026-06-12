@@ -154,7 +154,7 @@ export default function App() {
   const [showAccessToken, setShowAccessToken] = useState(false);
   const [isSendingWhatsApp, setIsSendingWhatsApp] = useState<string | null>(null);
   const [whatsappSettings, setWhatsappSettings] = useState<WhatsAppSettings>({
-    accessToken: localStorage.getItem('slp_wa_access_token') || '',
+    accessToken: localStorage.getItem('slp_wa_access_token') || 'EAAaIJ8yMa4sBRvLwBZA9bYBwHzpRoRnJo56AmPh6Vs0LpghzrokMnvT89emZABTleLk0LRBJpmuG0EGYS8DXGZAk2XZACHEAawhZC3fJVyPZCZCo9Fkx52CPo0v0rzgeWY2jVQIOMgQEYawrXqpVqpua2RbA5xNwcnwdKXLXnayj3bgN4H5qAEn8ZAqONfBDUbwGu5PlDhHB1MCHg3PabOpZCxFgkFWFnipzZCLrNTHDPXuqgcloCtZAVxGNtr2pf3CPtag8Tt46ddcnKNXoMpqR767rp5JLZCdBbaFWZB0HEpQZDZD',
     phoneNumberId: localStorage.getItem('slp_wa_phone_number_id') || '1193795173813206',
     businessAccountId: localStorage.getItem('slp_wa_business_account_id') || '995786956257682',
     templateName: localStorage.getItem('slp_wa_template_name') || 'hello_world',
@@ -239,12 +239,19 @@ export default function App() {
         try {
           const cloudSettings = await getWhatsAppSettings(user.uid);
           if (cloudSettings) {
-            setWhatsappSettings(cloudSettings);
-            if (cloudSettings.accessToken) localStorage.setItem('slp_wa_access_token', cloudSettings.accessToken);
-            if (cloudSettings.phoneNumberId) localStorage.setItem('slp_wa_phone_number_id', cloudSettings.phoneNumberId);
-            if (cloudSettings.businessAccountId) localStorage.setItem('slp_wa_business_account_id', cloudSettings.businessAccountId);
-            if (cloudSettings.templateName) localStorage.setItem('slp_wa_template_name', cloudSettings.templateName);
-            if (cloudSettings.langCode) localStorage.setItem('slp_wa_lang_code', cloudSettings.langCode);
+            const merged = {
+              accessToken: cloudSettings.accessToken || 'EAAaIJ8yMa4sBRvLwBZA9bYBwHzpRoRnJo56AmPh6Vs0LpghzrokMnvT89emZABTleLk0LRBJpmuG0EGYS8DXGZAk2XZACHEAawhZC3fJVyPZCZCo9Fkx52CPo0v0rzgeWY2jVQIOMgQEYawrXqpVqpua2RbA5xNwcnwdKXLXnayj3bgN4H5qAEn8ZAqONfBDUbwGu5PlDhHB1MCHg3PabOpZCxFgkFWFnipzZCLrNTHDPXuqgcloCtZAVxGNtr2pf3CPtag8Tt46ddcnKNXoMpqR767rp5JLZCdBbaFWZB0HEpQZDZD',
+              phoneNumberId: cloudSettings.phoneNumberId || '1193795173813206',
+              businessAccountId: cloudSettings.businessAccountId || '995786956257682',
+              templateName: cloudSettings.templateName || 'hello_world',
+              langCode: cloudSettings.langCode || 'en_US'
+            };
+            setWhatsappSettings(merged);
+            localStorage.setItem('slp_wa_access_token', merged.accessToken);
+            localStorage.setItem('slp_wa_phone_number_id', merged.phoneNumberId);
+            localStorage.setItem('slp_wa_business_account_id', merged.businessAccountId);
+            localStorage.setItem('slp_wa_template_name', merged.templateName);
+            localStorage.setItem('slp_wa_lang_code', merged.langCode);
           }
         } catch (err) {
           console.error("Could not load WhatsApp configurations from Firestore:", err);
