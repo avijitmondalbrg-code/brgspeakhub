@@ -819,10 +819,21 @@ export default function App() {
       if (!sendRes.ok) {
         const sendError = await sendRes.json();
         const code = sendError.error?.code;
-        const msg = sendError.error?.message;
+        const msg = sendError.error?.message || '';
         
+        if (msg.toLowerCase().includes('allowed list')) {
+          throw new Error(`Recipient Phone Number not in authorized list (Meta Sandbox limit).
+👉 Solution / সমাধান:
+1. Go to developers.facebook.com and select your App.
+2. From left sidebar, go to: WhatsApp -> API Setup.
+3. Look at the "To" selection box, click "Manage phone number list".
+4. Add and verify your patient's/receiver's phone number with an OTP.
+
+(আপনার ফেসবুক ডেভেলপার অ্যাকাউন্টে এই ফোন নম্বরটি 'Allowed numbers' লিস্টে যোগ করা নেই। developers.facebook.com এ যান -> WhatsApp -> API Setup এ গিয়ে recipient phone number টি ভেরিফাই করে দিন।)`);
+        }
+
         // Active window error fallback
-        if (code === 131030 || (msg && msg.toLowerCase().includes('window'))) {
+        if (code === 131030 || msg.toLowerCase().includes('window')) {
           setNotification({
             message: 'Active conversation window not open. Dispatching standard approved template notification...',
             type: 'info'
@@ -851,7 +862,18 @@ export default function App() {
 
           if (!fallbackRes.ok) {
             const fallbackErrorData = await fallbackRes.json();
-            throw new Error(`Failed to send WhatsApp warning alert. Meta API replied: ${fallbackErrorData.error?.message}`);
+            const fallbackMsg = fallbackErrorData.error?.message || '';
+            if (fallbackMsg.toLowerCase().includes('allowed list')) {
+              throw new Error(`Recipient Phone Number not in authorized list (Meta Sandbox limit).
+👉 Solution / সমাধান:
+1. Go to developers.facebook.com and select your App.
+2. From left sidebar, go to: WhatsApp -> API Setup.
+3. Look at the "To" selection box, click "Manage phone number list".
+4. Add and verify your patient's/receiver's phone number with an OTP.
+
+(আপনার ফেসবুক ডেভেলপার অ্যাকাউন্টে এই ফোন নম্বরটি 'Allowed numbers' লিস্টে যোগ করা নেই। developers.facebook.com এ যান -> WhatsApp -> API Setup এ গিয়ে recipient phone number টি ভেরিফাই করে দিন।)`);
+            }
+            throw new Error(`Failed to send WhatsApp warning alert. Meta API replied: ${fallbackMsg}`);
           }
 
           setNotification({
@@ -2702,6 +2724,20 @@ export default function App() {
                   </div>
                   <p className="text-[9px] text-slate-400 mt-1 leading-[1.3]">
                     Template name and languages are triggered as fallback automatically if the active 24h window constraint is hit. Default template approved by Meta is <strong>hello_world</strong>.
+                  </p>
+                </div>
+
+                <div className="bg-emerald-50/70 border border-emerald-100 rounded-lg p-3 space-y-1.5">
+                  <h6 className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider flex items-center gap-1">
+                    <span>💡 Meta Sandbox Mode / সমাধান</span>
+                  </h6>
+                  <p className="text-[9.5px] text-emerald-950 font-bold leading-tight">
+                    আপনি যদি Meta-র Test Business Account ব্যবহার করেন, তবে রোগী বা প্রাপকের নম্বরটিকে আগে ভেরিফাই করতে হবে:
+                  </p>
+                  <p className="text-[9px] text-slate-700 leading-relaxed">
+                    1. <a href="https://developers.facebook.com" target="_blank" rel="noreferrer" className="text-emerald-700 underline font-bold">developers.facebook.com</a> এ গিয়ে আপনার App সিলেক্ট করুন। <br />
+                    2. বামদিকের Sidebar থেকে <strong>WhatsApp → API Setup</strong> এ যান। <br />
+                    3. মাঝখানের "To" dropdown থেকে <strong>Manage phone number list</strong> এ ক্লিক করে প্রাপকের নম্বরটি যোগ ও ওটিপি (OTP) দিয়ে ভেরিফাই করুন।
                   </p>
                 </div>
 
