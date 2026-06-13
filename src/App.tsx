@@ -154,7 +154,7 @@ export default function App() {
   const [showAccessToken, setShowAccessToken] = useState(false);
   const [isSendingWhatsApp, setIsSendingWhatsApp] = useState<string | null>(null);
   const [whatsappSettings, setWhatsappSettings] = useState<WhatsAppSettings>({
-    accessToken: localStorage.getItem('slp_wa_access_token') || 'EAAaIJ8yMa4sBRvLwBZA9bYBwHzpRoRnJo56AmPh6Vs0LpghzrokMnvT89emZABTleLk0LRBJpmuG0EGYS8DXGZAk2XZACHEAawhZC3fJVyPZCZCo9Fkx52CPo0v0rzgeWY2jVQIOMgQEYawrXqpVqpua2RbA5xNwcnwdKXLXnayj3bgN4H5qAEn8ZAqONfBDUbwGu5PlDhHB1MCHg3PabOpZCxFgkFWFnipzZCLrNTHDPXuqgcloCtZAVxGNtr2pf3CPtag8Tt46ddcnKNXoMpqR767rp5JLZCdBbaFWZB0HEpQZDZD',
+    accessToken: localStorage.getItem('slp_wa_access_token') || 'EAAaIJ8yMa4sBRkfvlykYZAp3iBHnpA5PVVNnsbSZCsTpqq354lcspIhjYYw5ppCYZB4NbfBVZApJEI5HCbRMI7PZCcslMzJOYiZAmOZCD9uJGqtplwZBmML1AyXZCewqJpk796UKjSz9KaRjrzXowZAgd3717jJ6LQBa4gPkgmHZCn57pxu93UiTrLvGiuW4fzP0EkP3gZDZD',
     phoneNumberId: localStorage.getItem('slp_wa_phone_number_id') || '1193795173813206',
     businessAccountId: localStorage.getItem('slp_wa_business_account_id') || '995786956257682',
     templateName: localStorage.getItem('slp_wa_template_name') || 'hello_world',
@@ -234,13 +234,28 @@ export default function App() {
 
   // Sync WhatsApp settings on user state update
   useEffect(() => {
+    const localToken = localStorage.getItem('slp_wa_access_token');
+    const oldObsoleteToken = 'EAAaIJ8yMa4sBRvLwBZA9bYBwHzpRoRnJo56AmPh6Vs0LpghzrokMnvT89emZABTleLk0LRBJpmuG0EGYS8DXGZAk2XZACHEAawhZC3fJVyPZCZCo9Fkx52CPo0v0rzgeWY2jVQIOMgQEYawrXqpVqpua2RbA5xNwcnwdKXLXnayj3bgN4H5qAEn8ZAqONfBDUbwGu5PlDhHB1MCHg3PabOpZCxFgkFWFnipzZCLrNTHDPXuqgcloCtZAVxGNtr2pf3CPtag8Tt46ddcnKNXoMpqR767rp5JLZCdBbaFWZB0HEpQZDZD';
+    const oldObsoleteToken2 = 'EAAaIJ8yMa4sBRkRZCZCnuoZCY9EYZAucpW7s3nmIAxBLcVKrKC7JG6F8hzZAyzfwe3UqxbItMihJpVXmOxNHoL9wnyFjkLJFvsxMoMuGLdC4mOXE9vnwQFxu6BtQZCSy4DGsZC4zHcbdQTJ4as64kG2VcDvGwwRpDaxX5BWLL9Mb2IDbj149CugOBHD1eepmA3vXEyJT2NQeGSmdKWEndjbFOPD6P2MnV1o1ThHVSwSspCmwpLB1dzJhzmgcF7oCYkkA2xqF0JFDCw42fNbc9eKqj6VXYfPkJmQ7gn8IAZDZD';
+    const newActiveToken = 'EAAaIJ8yMa4sBRkfvlykYZAp3iBHnpA5PVVNnsbSZCsTpqq354lcspIhjYYw5ppCYZB4NbfBVZApJEI5HCbRMI7PZCcslMzJOYiZAmOZCD9uJGqtplwZBmML1AyXZCewqJpk796UKjSz9KaRjrzXowZAgd3717jJ6LQBa4gPkgmHZCn57pxu93UiTrLvGiuW4fzP0EkP3gZDZD';
+    if (!localToken || localToken === oldObsoleteToken || localToken === oldObsoleteToken2) {
+      localStorage.setItem('slp_wa_access_token', newActiveToken);
+      setWhatsappSettings(prev => ({
+        ...prev,
+        accessToken: newActiveToken
+      }));
+    }
+  }, []);
+
+  // Sync WhatsApp settings on user state update
+  useEffect(() => {
     const fetchWhatsAppSettings = async () => {
       if (user) {
         try {
           const cloudSettings = await getWhatsAppSettings(user.uid);
           if (cloudSettings) {
             const merged = {
-              accessToken: cloudSettings.accessToken || 'EAAaIJ8yMa4sBRvLwBZA9bYBwHzpRoRnJo56AmPh6Vs0LpghzrokMnvT89emZABTleLk0LRBJpmuG0EGYS8DXGZAk2XZACHEAawhZC3fJVyPZCZCo9Fkx52CPo0v0rzgeWY2jVQIOMgQEYawrXqpVqpua2RbA5xNwcnwdKXLXnayj3bgN4H5qAEn8ZAqONfBDUbwGu5PlDhHB1MCHg3PabOpZCxFgkFWFnipzZCLrNTHDPXuqgcloCtZAVxGNtr2pf3CPtag8Tt46ddcnKNXoMpqR767rp5JLZCdBbaFWZB0HEpQZDZD',
+              accessToken: cloudSettings.accessToken || 'EAAaIJ8yMa4sBRkfvlykYZAp3iBHnpA5PVVNnsbSZCsTpqq354lcspIhjYYw5ppCYZB4NbfBVZApJEI5HCbRMI7PZCcslMzJOYiZAmOZCD9uJGqtplwZBmML1AyXZCewqJpk796UKjSz9KaRjrzXowZAgd3717jJ6LQBa4gPkgmHZCn57pxu93UiTrLvGiuW4fzP0EkP3gZDZD',
               phoneNumberId: cloudSettings.phoneNumberId || '1193795173813206',
               businessAccountId: cloudSettings.businessAccountId || '995786956257682',
               templateName: cloudSettings.templateName || 'hello_world',
@@ -775,7 +790,17 @@ export default function App() {
 
       if (!uploadRes.ok) {
         const errorData = await uploadRes.json();
-        throw new Error(errorData.error?.message || 'Meta API Media Upload did not respond successfully.');
+        const errorMsg = errorData.error?.message || '';
+        const errorCode = errorData.error?.code;
+
+        if (errorMsg.toLowerCase().includes('authentication') || errorCode === 190) {
+          throw new Error(`Authentication Error / অথেন্টিকেশন ত্রুটি:
+👉 Solution / সমাধান:
+আপনার Meta Access Token এবং Phone Number ID একে অপরের সাথে মেলেনি অথবা টোকেনের মেয়াদ শেষ হয়ে গেছে।
+1. 'Sync WhatsApp' প্যানেলে গিয়ে আপনার Phone Number ID এবং Business Account ID টি চেক করুন। ওগুলো কি developers.facebook.com-এর সাথে ম্যাচ করছে?
+2. আপনার Access Token টি কি Temporary (যা ২৪ ঘন্টা পর এক্সপায়ার হয়ে যায়)? নতুন টোকেন জেনারেট করে 'Sync WhatsApp' এ আপডেট করুন।`);
+        }
+        throw new Error(errorMsg || 'Meta API Media Upload did not respond successfully.');
       }
 
       const uploadData = await uploadRes.json();
@@ -820,6 +845,14 @@ export default function App() {
         const sendError = await sendRes.json();
         const code = sendError.error?.code;
         const msg = sendError.error?.message || '';
+        
+        if (msg.toLowerCase().includes('authentication') || code === 190) {
+          throw new Error(`Authentication Error / অথেন্টিকেশন ত্রুটি:
+👉 Solution / সমাধান:
+আপনার Meta Access Token এবং Phone Number ID একে অপরের সাথে মেলেনি অথবা টোকেনের মেয়াদ শেষ হয়ে গেছে।
+1. 'Sync WhatsApp' প্যানেলে গিয়ে আপনার Phone Number ID এবং Business Account ID টি চেক করুন। ওগুলো কি developers.facebook.com-এর সাথে ম্যাচ করছে?
+2. আপনার Access Token টি কি Temporary (যা ২৪ ঘন্টা পর এক্সপায়ার হয়ে যায়)? নতুন টোকেন জেনারেট করে 'Sync WhatsApp' এ আপডেট করুন।`);
+        }
         
         if (msg.toLowerCase().includes('allowed list')) {
           throw new Error(`Recipient Phone Number not in authorized list (Meta Sandbox limit).
@@ -1330,15 +1363,22 @@ export default function App() {
     });
   };
 
-  // Filter plans list
-  const filteredPlans = plans.filter(p => {
-    const q = searchQuery.toLowerCase();
-    return (
-      p.patientName.toLowerCase().includes(q) ||
-      p.provisionalDiagnosis.toLowerCase().includes(q) ||
-      p.therapistName.toLowerCase().includes(q)
-    );
-  });
+  // Filter plans list and deduplicate by ID to guarantee unique React keys
+  const filteredPlans = (() => {
+    const seen = new Set<string>();
+    return plans.filter(p => {
+      if (!p.id) return false;
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+
+      const q = searchQuery.toLowerCase();
+      return (
+        p.patientName.toLowerCase().includes(q) ||
+        p.provisionalDiagnosis.toLowerCase().includes(q) ||
+        p.therapistName.toLowerCase().includes(q)
+      );
+    });
+  })();
 
   return (
     <div className="flex bg-slate-100 font-sans text-slate-900 h-screen w-screen overflow-hidden" id="vocalis-app-root">
