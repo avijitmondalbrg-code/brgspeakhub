@@ -57,6 +57,35 @@ const BRGLogo = ({ className = "w-10 h-10" }: { className?: string }) => (
   </svg>
 );
 
+// Robust key-value fallback storage for contexts where localStorage is blocked (e.g., inside restricted iframes)
+const inMemoryStorage: Record<string, string> = {};
+const safeLocalStorage = {
+  getItem: (key: string): string | null => {
+    try {
+      return localStorage.getItem(key);
+    } catch (e) {
+      console.warn("Storage access restricted, falling back to in-memory store", e);
+      return inMemoryStorage[key] || null;
+    }
+  },
+  setItem: (key: string, value: string): void => {
+    try {
+      localStorage.setItem(key, value);
+    } catch (e) {
+      console.warn("Storage write restricted, falling back to in-memory store", e);
+      inMemoryStorage[key] = value;
+    }
+  },
+  removeItem: (key: string): void => {
+    try {
+      localStorage.removeItem(key);
+    } catch (e) {
+      console.warn("Storage removal restricted", e);
+      delete inMemoryStorage[key];
+    }
+  }
+};
+
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -65,7 +94,7 @@ export default function App() {
 
   // Custom persistent brand logo state & file picker ref
   const [customLogo, setCustomLogo] = useState<string>(() => {
-    return localStorage.getItem('vocalis_custom_logo') || '';
+    return safeLocalStorage.getItem('vocalis_custom_logo') || '';
   });
   const logoInputRef = useRef<HTMLInputElement>(null);
 
@@ -83,7 +112,7 @@ export default function App() {
       reader.onloadend = () => {
         const base64 = reader.result as string;
         setCustomLogo(base64);
-        localStorage.setItem('vocalis_custom_logo', base64);
+        safeLocalStorage.setItem('vocalis_custom_logo', base64);
         setNotification({
           message: 'Your custom logo was uploaded and saved successfully!',
           type: 'success'
@@ -95,7 +124,7 @@ export default function App() {
 
   const handleLogoReset = () => {
     setCustomLogo('');
-    localStorage.removeItem('vocalis_custom_logo');
+    safeLocalStorage.removeItem('vocalis_custom_logo');
     setNotification({
       message: 'Logo reset to default BRG branding.',
       type: 'success'
@@ -152,13 +181,17 @@ export default function App() {
   // WhatsApp settings and modals
   const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
   const [showAccessToken, setShowAccessToken] = useState(false);
+  const [diagnosing, setDiagnosing] = useState(false);
+  const [diagResult, setDiagResult] = useState<{success: boolean; message: string} | null>(null);
+  const [registerPin, setRegisterPin] = useState('');
+  const [registering, setRegistering] = useState(false);
   const [isSendingWhatsApp, setIsSendingWhatsApp] = useState<string | null>(null);
   const [whatsappSettings, setWhatsappSettings] = useState<WhatsAppSettings>({
-    accessToken: localStorage.getItem('slp_wa_access_token') || 'EAAaIJ8yMa4sBRkfvlykYZAp3iBHnpA5PVVNnsbSZCsTpqq354lcspIhjYYw5ppCYZB4NbfBVZApJEI5HCbRMI7PZCcslMzJOYiZAmOZCD9uJGqtplwZBmML1AyXZCewqJpk796UKjSz9KaRjrzXowZAgd3717jJ6LQBa4gPkgmHZCn57pxu93UiTrLvGiuW4fzP0EkP3gZDZD',
-    phoneNumberId: localStorage.getItem('slp_wa_phone_number_id') || '1193795173813206',
-    businessAccountId: localStorage.getItem('slp_wa_business_account_id') || '995786956257682',
-    templateName: localStorage.getItem('slp_wa_template_name') || 'hello_world',
-    langCode: localStorage.getItem('slp_wa_lang_code') || 'en_US'
+    accessToken: safeLocalStorage.getItem('slp_wa_access_token') || 'EAAaIJ8yMa4sBRkR9hGWgaQPBZBxKqWbUzGOYcHDNc2eNTYee5KDUNlSMegxggjhqNYesll1ZBnxZBGkd8xPftzZAT68VIy8iibMMoD5zXkrJN1j0ZCXNH7QXxO7CZCqkr2QzayVKnki5lUu687dByehoeJIVn9rZCmfH493NKa6hvHBnVjKbhKrVnKhiPCAtaqgkwZDZD',
+    phoneNumberId: safeLocalStorage.getItem('slp_wa_phone_number_id') || '1183533281504386',
+    businessAccountId: safeLocalStorage.getItem('slp_wa_business_account_id') || '1323055779302168',
+    templateName: safeLocalStorage.getItem('slp_wa_template_name') || 'hello_world',
+    langCode: safeLocalStorage.getItem('slp_wa_lang_code') || 'en_US'
   });
   
   // Status notifications
@@ -234,15 +267,48 @@ export default function App() {
 
   // Sync WhatsApp settings on user state update
   useEffect(() => {
-    const localToken = localStorage.getItem('slp_wa_access_token');
+    const localToken = safeLocalStorage.getItem('slp_wa_access_token');
+    const localPhoneId = safeLocalStorage.getItem('slp_wa_phone_number_id');
+    const localBusinessId = safeLocalStorage.getItem('slp_wa_business_account_id');
+    
     const oldObsoleteToken = 'EAAaIJ8yMa4sBRvLwBZA9bYBwHzpRoRnJo56AmPh6Vs0LpghzrokMnvT89emZABTleLk0LRBJpmuG0EGYS8DXGZAk2XZACHEAawhZC3fJVyPZCZCo9Fkx52CPo0v0rzgeWY2jVQIOMgQEYawrXqpVqpua2RbA5xNwcnwdKXLXnayj3bgN4H5qAEn8ZAqONfBDUbwGu5PlDhHB1MCHg3PabOpZCxFgkFWFnipzZCLrNTHDPXuqgcloCtZAVxGNtr2pf3CPtag8Tt46ddcnKNXoMpqR767rp5JLZCdBbaFWZB0HEpQZDZD';
     const oldObsoleteToken2 = 'EAAaIJ8yMa4sBRkRZCZCnuoZCY9EYZAucpW7s3nmIAxBLcVKrKC7JG6F8hzZAyzfwe3UqxbItMihJpVXmOxNHoL9wnyFjkLJFvsxMoMuGLdC4mOXE9vnwQFxu6BtQZCSy4DGsZC4zHcbdQTJ4as64kG2VcDvGwwRpDaxX5BWLL9Mb2IDbj149CugOBHD1eepmA3vXEyJT2NQeGSmdKWEndjbFOPD6P2MnV1o1ThHVSwSspCmwpLB1dzJhzmgcF7oCYkkA2xqF0JFDCw42fNbc9eKqj6VXYfPkJmQ7gn8IAZDZD';
-    const newActiveToken = 'EAAaIJ8yMa4sBRkfvlykYZAp3iBHnpA5PVVNnsbSZCsTpqq354lcspIhjYYw5ppCYZB4NbfBVZApJEI5HCbRMI7PZCcslMzJOYiZAmOZCD9uJGqtplwZBmML1AyXZCewqJpk796UKjSz9KaRjrzXowZAgd3717jJ6LQBa4gPkgmHZCn57pxu93UiTrLvGiuW4fzP0EkP3gZDZD';
-    if (!localToken || localToken === oldObsoleteToken || localToken === oldObsoleteToken2) {
-      localStorage.setItem('slp_wa_access_token', newActiveToken);
+    const oldObsoleteToken3 = 'EAAaIJ8yMa4sBRkfvlykYZAp3iBHnpA5PVVNnsbSZCsTpqq354lcspIhjYYw5ppCYZB4NbfBVZApJEI5HCbRMI7PZCcslMzJOYiZAmOZCD9uJGqtplwZBmML1AyXZCewqJpk796UKjSz9KaRjrzXowZAgd3717jJ6LQBa4gPkgmHZCn57pxu93UiTrLvGiuW4fzP0EkP3gZDZD';
+    const newActiveToken = 'EAAaIJ8yMa4sBRkR9hGWgaQPBZBxKqWbUzGOYcHDNc2eNTYee5KDUNlSMegxggjhqNYesll1ZBnxZBGkd8xPftzZAT68VIy8iibMMoD5zXkrJN1j0ZCXNH7QXxO7CZCqkr2QzayVKnki5lUu687dByehoeJIVn9rZCmfH493NKa6hvHBnVjKbhKrVnKhiPCAtaqgkwZDZD';
+    
+    const obseletePhoneId = '1193795173813206';
+    const newPhoneId = '1183533281504386';
+    
+    const obseleteBusinessId = '995786956257682';
+    const newBusinessId = '1323055779302168';
+ 
+    let updated = false;
+    let tokenToSet = localToken || newActiveToken;
+    let phoneToSet = localPhoneId || newPhoneId;
+    let businessToSet = localBusinessId || newBusinessId;
+ 
+    if (!localToken || localToken === oldObsoleteToken || localToken === oldObsoleteToken2 || localToken === oldObsoleteToken3) {
+      tokenToSet = newActiveToken;
+      safeLocalStorage.setItem('slp_wa_access_token', newActiveToken);
+      updated = true;
+    }
+    if (!localPhoneId || localPhoneId === obseletePhoneId) {
+      phoneToSet = newPhoneId;
+      safeLocalStorage.setItem('slp_wa_phone_number_id', newPhoneId);
+      updated = true;
+    }
+    if (!localBusinessId || localBusinessId === obseleteBusinessId) {
+      businessToSet = newBusinessId;
+      safeLocalStorage.setItem('slp_wa_business_account_id', newBusinessId);
+      updated = true;
+    }
+ 
+    if (updated) {
       setWhatsappSettings(prev => ({
         ...prev,
-        accessToken: newActiveToken
+        accessToken: tokenToSet,
+        phoneNumberId: phoneToSet,
+        businessAccountId: businessToSet
       }));
     }
   }, []);
@@ -255,18 +321,18 @@ export default function App() {
           const cloudSettings = await getWhatsAppSettings(user.uid);
           if (cloudSettings) {
             const merged = {
-              accessToken: cloudSettings.accessToken || 'EAAaIJ8yMa4sBRkfvlykYZAp3iBHnpA5PVVNnsbSZCsTpqq354lcspIhjYYw5ppCYZB4NbfBVZApJEI5HCbRMI7PZCcslMzJOYiZAmOZCD9uJGqtplwZBmML1AyXZCewqJpk796UKjSz9KaRjrzXowZAgd3717jJ6LQBa4gPkgmHZCn57pxu93UiTrLvGiuW4fzP0EkP3gZDZD',
-              phoneNumberId: cloudSettings.phoneNumberId || '1193795173813206',
-              businessAccountId: cloudSettings.businessAccountId || '995786956257682',
+              accessToken: cloudSettings.accessToken || 'EAAaIJ8yMa4sBRkR9hGWgaQPBZBxKqWbUzGOYcHDNc2eNTYee5KDUNlSMegxggjhqNYesll1ZBnxZBGkd8xPftzZAT68VIy8iibMMoD5zXkrJN1j0ZCXNH7QXxO7CZCqkr2QzayVKnki5lUu687dByehoeJIVn9rZCmfH493NKa6hvHBnVjKbhKrVnKhiPCAtaqgkwZDZD',
+              phoneNumberId: cloudSettings.phoneNumberId || '1183533281504386',
+              businessAccountId: cloudSettings.businessAccountId || '1323055779302168',
               templateName: cloudSettings.templateName || 'hello_world',
               langCode: cloudSettings.langCode || 'en_US'
             };
             setWhatsappSettings(merged);
-            localStorage.setItem('slp_wa_access_token', merged.accessToken);
-            localStorage.setItem('slp_wa_phone_number_id', merged.phoneNumberId);
-            localStorage.setItem('slp_wa_business_account_id', merged.businessAccountId);
-            localStorage.setItem('slp_wa_template_name', merged.templateName);
-            localStorage.setItem('slp_wa_lang_code', merged.langCode);
+            safeLocalStorage.setItem('slp_wa_access_token', merged.accessToken);
+            safeLocalStorage.setItem('slp_wa_phone_number_id', merged.phoneNumberId);
+            safeLocalStorage.setItem('slp_wa_business_account_id', merged.businessAccountId);
+            safeLocalStorage.setItem('slp_wa_template_name', merged.templateName);
+            safeLocalStorage.setItem('slp_wa_lang_code', merged.langCode);
           }
         } catch (err) {
           console.error("Could not load WhatsApp configurations from Firestore:", err);
@@ -278,11 +344,11 @@ export default function App() {
 
   const handleSaveWhatsAppSettings = async (settings: WhatsAppSettings) => {
     setWhatsappSettings(settings);
-    localStorage.setItem('slp_wa_access_token', settings.accessToken);
-    localStorage.setItem('slp_wa_phone_number_id', settings.phoneNumberId);
-    localStorage.setItem('slp_wa_business_account_id', settings.businessAccountId);
-    localStorage.setItem('slp_wa_template_name', settings.templateName || 'hello_world');
-    localStorage.setItem('slp_wa_lang_code', settings.langCode || 'en_US');
+    safeLocalStorage.setItem('slp_wa_access_token', settings.accessToken);
+    safeLocalStorage.setItem('slp_wa_phone_number_id', settings.phoneNumberId);
+    safeLocalStorage.setItem('slp_wa_business_account_id', settings.businessAccountId);
+    safeLocalStorage.setItem('slp_wa_template_name', settings.templateName || 'hello_world');
+    safeLocalStorage.setItem('slp_wa_lang_code', settings.langCode || 'en_US');
 
     if (user) {
       try {
@@ -306,6 +372,106 @@ export default function App() {
     setShowWhatsAppModal(false);
   };
 
+  const testWhatsAppConnection = async (tempToken?: string, tempPhoneId?: string) => {
+    setDiagnosing(true);
+    setDiagResult(null);
+    const token = (tempToken || whatsappSettings.accessToken).trim();
+    const phoneId = (tempPhoneId || whatsappSettings.phoneNumberId).trim();
+
+    try {
+      const res = await fetch(`https://graph.facebook.com/v20.0/${phoneId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      const data = await res.json();
+      if (res.ok) {
+        setDiagResult({
+          success: true,
+          message: `✅ Connection Successful / কানেকশন সফল হয়েছে!\n• Phone Number: ${data.display_phone_number || 'Registered'}\n• Verified Name: ${data.verified_name || 'N/A'}\n• Status: ${data.status || 'Verified & Ready'}`
+        });
+      } else {
+        const errCode = data.error?.code;
+        const errMsg = data.error?.message || '';
+        
+        let customHelp = '';
+        if (errCode === 133010 || errMsg.toLowerCase().includes('not registered')) {
+          customHelp = `\n\n🔍 সমাধান (Solution): আপনার এই নাম্বার আইডিটি (${phoneId}) হোয়াটসঅ্যাপে রেজিস্টার করা হয়নি। নিচে আপনার ২-স্টেপ ভেরিফিকেশন পিন (Two-step PIN) দিয়ে 'Register Number with Meta' বাটনে ক্লিক করে রেজিস্ট্রেশনটি সম্পন্ন করুন।`;
+        } else if (errCode === 190) {
+          customHelp = `\n\n🔍 সমাধান (Solution): আপনার টোকেনটি সঠিক নয় অথবা এটির মেয়াদ ফুরিয়ে গেছে। দয়া করে developers.facebook.com থেকে সঠিক সচল টোকেনটি কপি করে এডিট করুন।`;
+        }
+
+        setDiagResult({
+          success: false,
+          message: `❌ Error: ${errMsg} (Code: ${errCode})${customHelp}`
+        });
+      }
+    } catch (err: any) {
+      setDiagResult({
+        success: false,
+        message: `❌ Connection Failed / কানেকশন ব্যর্থ হয়েছে: ${err.message}`
+      });
+    } finally {
+      setDiagnosing(false);
+    }
+  };
+
+  const registerWhatsAppNumber = async (pin6: string, tempToken?: string, tempPhoneId?: string) => {
+    if (!pin6 || pin6.length !== 6) {
+      setNotification({
+        message: 'Two-step verification PIN is required and must be exactly 6 digits! / ৬ সংখ্যার পিন দিন।',
+        type: 'error'
+      });
+      return;
+    }
+
+    setRegistering(true);
+    const token = (tempToken || whatsappSettings.accessToken).trim();
+    const phoneId = (tempPhoneId || whatsappSettings.phoneNumberId).trim();
+
+    try {
+      const res = await fetch(`https://graph.facebook.com/v20.0/${phoneId}/register`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          pin: pin6
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setNotification({
+          message: '🎉 WhatsApp Phone Number successfully registered with Meta Cloud API!',
+          type: 'success'
+        });
+        setDiagResult({
+          success: true,
+          message: '✅ Phone Number Successfully Registered / নাম্বার সফলভাবে হোয়াটসঅ্যাপ মেটা ক্লাউডে রেজিস্টার হয়েছে! এখন থেকে সরাসরি রোগীদের যেকোনো রিপোর্টে মেসেজ পাঠাতে পারবেন।'
+        });
+      } else {
+        const errMsg = data.error?.message || 'Unknown registration error';
+        const errCode = data.error?.code;
+        setDiagResult({
+          success: false,
+          message: `❌ Registration Failed / রেজিস্ট্রেশন ব্যর্থ হয়েছে: ${errMsg} (Code: ${errCode || 'N/A'})\n\n💡 সমাধান: আপনার মেটা পোর্টাল (developers.facebook.com) এ গিয়ে নিশ্চিত হোন যে আপনার নম্বর আইডি ও টোকেনের পারমিশন ঠিক আছে এবং টু-স্টেপ ভেরিফিকেশন পিনটি সঠিক।`
+        });
+      }
+    } catch (err: any) {
+      setDiagResult({
+        success: false,
+        message: `❌ Connection Error / কানেকশন ব্যর্থ: ${err.message}`
+      });
+    } finally {
+      setRegistering(false);
+    }
+  };
+
   const loadPlans = async () => {
     setLoadingPlans(true);
     if (user) {
@@ -323,7 +489,7 @@ export default function App() {
   };
 
   const loadLocalPlans = () => {
-    const localData = localStorage.getItem('vocalis_local_plans');
+    const localData = safeLocalStorage.getItem('vocalis_local_plans');
     if (localData) {
       try {
         setPlans(JSON.parse(localData));
@@ -336,7 +502,7 @@ export default function App() {
   };
 
   const saveLocalPlans = (updatedPlans: any[]) => {
-    localStorage.setItem('vocalis_local_plans', JSON.stringify(updatedPlans));
+    safeLocalStorage.setItem('vocalis_local_plans', JSON.stringify(updatedPlans));
     setPlans(updatedPlans);
   };
 
@@ -815,7 +981,17 @@ export default function App() {
         type: 'info'
       });
 
-      const sanitizedPhone = plan.patientPhone ? plan.patientPhone.replace(/\D/g, '') : '';
+      let sanitizedPhone = plan.patientPhone ? plan.patientPhone.replace(/\D/g, '') : '';
+      if (sanitizedPhone) {
+        // Handle common Bangladesh format: e.g., 01712345678 (11 digits starting with 01)
+        if (sanitizedPhone.length === 11 && sanitizedPhone.startsWith('01')) {
+          sanitizedPhone = '88' + sanitizedPhone;
+        } 
+        // Handle common Indian format: 10 digits starting with 6, 7, 8, or 9
+        else if (sanitizedPhone.length === 10 && /^[6789]/.test(sanitizedPhone)) {
+          sanitizedPhone = '91' + sanitizedPhone;
+        }
+      }
       if (!sanitizedPhone) {
         throw new Error('Valid patient phone number is missing.');
       }
@@ -863,6 +1039,15 @@ export default function App() {
 4. Add and verify your patient's/receiver's phone number with an OTP.
 
 (আপনার ফেসবুক ডেভেলপার অ্যাকাউন্টে এই ফোন নম্বরটি 'Allowed numbers' লিস্টে যোগ করা নেই। developers.facebook.com এ যান -> WhatsApp -> API Setup এ গিয়ে recipient phone number টি ভেরিফাই করে দিন।)`);
+        }
+
+        if (code === 133010 || msg.toLowerCase().includes('account not registered')) {
+          throw new Error(`(#133010) Account not registered / হোয়াটসঅ্যাপ নাম্বার রেজিস্টার করা নাই।
+👉 Solution / সমাধান:
+আপনার মেটা বিজনেস ফোন নাম্বার আইডিটি (${whatsappSettings.phoneNumberId}) হোয়াটসঅ্যাপ ক্লাউড এপিআই সিস্টেমে রেজিস্টার করা হয়নি।
+
+১. আপনার এই অ্যাপের 'Sync WhatsApp' প্যানেলে যান এবং নিচে 'Diagnostic Panel' এ আপনার ৬ সংখ্যার গোপন টু-স্টেপ ভেরিফিকেশন পিন (PIN) দিয়ে 'Register Number with Meta' বাটনে ক্লিক করুন।
+২. অথবা, developers.facebook.com এ গিয়ে WhatsApp → API Setup এ গিয়ে আপনার ফোন নাম্বারের পাশে রেজিস্ট্রেশন বা ভেরিফিকেশন সম্পন্ন করুন।`);
         }
 
         // Active window error fallback
@@ -2765,6 +2950,75 @@ export default function App() {
                   <p className="text-[9px] text-slate-400 mt-1 leading-[1.3]">
                     Template name and languages are triggered as fallback automatically if the active 24h window constraint is hit. Default template approved by Meta is <strong>hello_world</strong>.
                   </p>
+                </div>
+
+                <div className="border-t border-slate-150 pt-3.5 mt-3.5 space-y-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                  <h5 className="text-[10px] font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
+                    <span>🔍 Debug & Verification / লাইভ কানেকশন টুল</span>
+                    <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-bold uppercase">Ready</span>
+                  </h5>
+                  
+                  <p className="text-[9.5px] text-slate-500 leading-tight leading-[1.3]">
+                    বাস্তব রোগীদের হোয়াটসঅ্যাপ নাম্বারে সরাসরি মেসেজ পাঠাতে আপনার বিজনেস নাম্বারটি মেটায় রেজিস্টার থাকতে হবে। এখান থেকে সরাসরি ভেরিফাই ও কানেক্ট করুন:
+                  </p>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={diagnosing}
+                      onClick={() => {
+                        const form = document.querySelector('form');
+                        const tempToken = form ? (new FormData(form).get('accessToken') as string || '') : '';
+                        const tempPhoneId = form ? (new FormData(form).get('phoneNumberId') as string || '') : '';
+                        testWhatsAppConnection(tempToken, tempPhoneId);
+                      }}
+                      className="flex-1 py-1 px-2 bg-slate-900 text-white rounded text-[10px] font-bold hover:bg-slate-800 disabled:bg-slate-300 transition text-center cursor-pointer"
+                    >
+                      {diagnosing ? 'Checking Connection...' : 'Test Connection Status / কানেকশন চেক'}
+                    </button>
+                  </div>
+
+                  {diagResult && (
+                    <div className={`p-2.5 rounded text-[9.5px] font-bold leading-relaxed whitespace-pre-wrap border ${
+                      diagResult.success 
+                        ? 'bg-emerald-50 text-emerald-900 border-emerald-200' 
+                        : 'bg-red-50 text-red-900 border-red-200'
+                    }`}>
+                      {diagResult.message}
+                    </div>
+                  )}
+
+                  <div className="border-t border-dashed border-slate-300 pt-2.5 mt-2.5 space-y-2">
+                    <label className="block text-[10px] font-bold text-slate-600">
+                      ৬ সংখ্যার টু-স্টেপ ভেরিফিকেশন পিন (Two-step PIN)
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        maxLength={6}
+                        placeholder="e.g., 123456"
+                        value={registerPin}
+                        onChange={(e) => setRegisterPin(e.target.value.replace(/\D/g, ''))}
+                        className="w-1/3 bg-white border border-slate-300 rounded px-2.5 py-1 text-xs font-bold font-mono tracking-widest text-center"
+                      />
+                      <button
+                        type="button"
+                        disabled={registering || registerPin.length !== 6}
+                        onClick={() => {
+                          const form = document.querySelector('form');
+                          const tempToken = form ? (new FormData(form).get('accessToken') as string || '') : '';
+                          const tempPhoneId = form ? (new FormData(form).get('phoneNumberId') as string || '') : '';
+                          registerWhatsAppNumber(registerPin, tempToken, tempPhoneId);
+                        }}
+                        className="flex-1 py-1 px-2 bg-emerald-600 text-white rounded text-[10px] font-bold hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 transition text-center cursor-pointer"
+                      >
+                        {registering ? 'Registering with Meta...' : 'Register Number with Meta'}
+                      </button>
+                    </div>
+                    <p className="text-[8.5px] text-slate-400 leading-tight leading-[1.3]">
+                      *টু-স্টেপ ভেরিফিকেশন পিন আপনার WhatsApp Manager → Phone Numbers এ সেট করতে পারেন। অথবা মেটার ডিফল্ট পিন বা আপনার দেওয়া পিন দিয়ে সাবমিট করুন।
+                    </p>
+                  </div>
                 </div>
 
                 <div className="bg-emerald-50/70 border border-emerald-100 rounded-lg p-3 space-y-1.5">
