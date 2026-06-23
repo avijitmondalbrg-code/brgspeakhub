@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { auth, googleProvider, signInWithPopup } from './firebase';
-import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
+import { onAuthStateChanged, signOut, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
 import { TherapyPlan, WhatsAppSettings } from './types';
 import { saveTherapyPlan, deleteTherapyPlan, getTherapyPlans, saveWhatsAppSettings, getWhatsAppSettings } from './firebaseService';
 import SignaturePad from './components/SignaturePad';
@@ -247,14 +247,23 @@ export default function App() {
 
   // Authenticate monitor
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
-      setAuthLoading(false);
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
+        setUser(firebaseUser);
+        setAuthLoading(false);
+        const displayName = firebaseUser.isAnonymous ? "Guest Session" : (firebaseUser.email || "Practitioner");
         setNotification({
-          message: `Logged in securely as ${firebaseUser.email}`,
+          message: `Logged in securely as ${displayName}`,
           type: 'success'
         });
+      } else {
+        try {
+          await signInAnonymously(auth);
+        } catch (error) {
+          console.error("Auto anonymous sign-in failed:", error);
+          setUser(null);
+          setAuthLoading(false);
+        }
       }
     });
     return unsubscribe;
@@ -738,6 +747,7 @@ export default function App() {
   // WhatsApp automatic sender and delivery pipeline
   const sendPDFToWhatsApp = async (plan: TherapyPlan) => {
     setIsSendingWhatsApp(plan.id);
+    let isRestored = false;
     setNotification({
       message: `Formulating clinical report PDF for patient "${plan.patientName}"...`,
       type: 'info'
@@ -876,6 +886,39 @@ export default function App() {
       console.error('Could not set up window.getComputedStyle interceptor proxy:', proxyError);
     }
 
+    const restoreStyles = () => {
+      if (isRestored) return;
+      isRestored = true;
+      try {
+        (window as any).getComputedStyle = originalGetComputedStyle;
+      } catch (e) {
+        console.error('Could not restore getComputedStyle:', e);
+      }
+
+      for (const backup of styleBackups) {
+        try {
+          backup.element.textContent = backup.originalText;
+        } catch (e) {
+          console.warn('Could not restore style tag content:', e);
+        }
+      }
+
+      for (const backup of stylesBackup) {
+        const { sheet, rules } = backup;
+        for (const rule of rules) {
+          try {
+            sheet.insertRule(rule.cssText, rule.index);
+          } catch (restoreError) {
+            try {
+              sheet.insertRule(rule.cssText, sheet.cssRules.length);
+            } catch (fallbackError) {
+              console.warn('Failed to restore custom rule:', rule.cssText, fallbackError);
+            }
+          }
+        }
+      }
+    };
+
     try {
       const element = document.getElementById('clinical-report-paper');
       if (!element) {
@@ -912,6 +955,7 @@ export default function App() {
       };
 
       const canvas = await html2canvas(element, opt);
+      restoreStyles();
       const imgData = canvas.toDataURL('image/png');
       
       const pdf = new jsPDF('p', 'mm', 'a4');
@@ -1115,35 +1159,7 @@ export default function App() {
         type: 'error'
       });
     } finally {
-      // 4. RESTORE ALL STYLE MECHANICS TRANSPARENTLY
-      try {
-        (window as any).getComputedStyle = originalGetComputedStyle;
-      } catch (e) {
-        console.error('Could not restore getComputedStyle:', e);
-      }
-
-      for (const backup of styleBackups) {
-        try {
-          backup.element.textContent = backup.originalText;
-        } catch (e) {
-          console.warn('Could not restore style tag content:', e);
-        }
-      }
-
-      for (const backup of stylesBackup) {
-        const { sheet, rules } = backup;
-        for (const rule of rules) {
-          try {
-            sheet.insertRule(rule.cssText, rule.index);
-          } catch (restoreError) {
-            try {
-              sheet.insertRule(rule.cssText, sheet.cssRules.length);
-            } catch (fallbackError) {
-              console.warn('Failed to restore custom rule:', rule.cssText, fallbackError);
-            }
-          }
-        }
-      }
+      restoreStyles();
       setIsSendingWhatsApp(null);
     }
   };
@@ -1199,6 +1215,7 @@ export default function App() {
   const downloadReportAsPDF = async () => {
     if (!currentPlan) return;
     setIsExporting(true);
+    let isRestored = false;
     setNotification({
       message: 'Generating professional vector clinical report...',
       type: 'info'
@@ -1337,6 +1354,39 @@ export default function App() {
       console.error('Could not set up window.getComputedStyle interceptor proxy:', proxyError);
     }
 
+    const restoreStyles = () => {
+      if (isRestored) return;
+      isRestored = true;
+      try {
+        (window as any).getComputedStyle = originalGetComputedStyle;
+      } catch (e) {
+        console.error('Could not restore getComputedStyle:', e);
+      }
+
+      for (const backup of styleBackups) {
+        try {
+          backup.element.textContent = backup.originalText;
+        } catch (e) {
+          console.warn('Could not restore style tag content:', e);
+        }
+      }
+
+      for (const backup of stylesBackup) {
+        const { sheet, rules } = backup;
+        for (const rule of rules) {
+          try {
+            sheet.insertRule(rule.cssText, rule.index);
+          } catch (restoreError) {
+            try {
+              sheet.insertRule(rule.cssText, sheet.cssRules.length);
+            } catch (fallbackError) {
+              console.warn('Failed to restore custom rule:', rule.cssText, fallbackError);
+            }
+          }
+        }
+      }
+    };
+
     try {
       const element = document.getElementById('clinical-report-paper');
       if (!element) {
@@ -1374,6 +1424,7 @@ export default function App() {
       };
 
       const canvas = await html2canvas(element, opt);
+      restoreStyles();
       const imgData = canvas.toDataURL('image/png');
       
       const pdf = new jsPDF('p', 'mm', 'a4');
@@ -1408,39 +1459,7 @@ export default function App() {
         type: 'error'
       });
     } finally {
-      // 4. RESTORE ALL STYLE MECHANICS TRANSPARENTLY
-      
-      // Restores window.getComputedStyle proxy wrapper
-      try {
-        (window as any).getComputedStyle = originalGetComputedStyle;
-      } catch (e) {
-        console.error('Could not restore getComputedStyle:', e);
-      }
-
-      // Restores inline `<style>` tags texts
-      for (const backup of styleBackups) {
-        try {
-          backup.element.textContent = backup.originalText;
-        } catch (e) {
-          console.warn('Could not restore style tag content:', e);
-        }
-      }
-
-      // Restores specific stylesheet rule backups
-      for (const backup of stylesBackup) {
-        const { sheet, rules } = backup;
-        for (const rule of rules) {
-          try {
-            sheet.insertRule(rule.cssText, rule.index);
-          } catch (restoreError) {
-            try {
-              sheet.insertRule(rule.cssText, sheet.cssRules.length);
-            } catch (fallbackError) {
-              console.warn('Failed to restore custom rule:', rule.cssText, fallbackError);
-            }
-          }
-        }
-      }
+      restoreStyles();
       setIsExporting(false);
     }
   };
@@ -1536,7 +1555,7 @@ export default function App() {
                 }, 500);
               }, 500);
             };
-          </script>
+          <\/script>
         </body>
       </html>
     `);
@@ -1671,7 +1690,7 @@ export default function App() {
             <div className="mx-2 p-2.5 bg-slate-800/40 rounded-lg flex items-center gap-2 text-[10px] text-slate-450 border border-slate-800/80">
               <div className={`w-2 h-2 rounded-full shrink-0 ${user ? 'bg-emerald-500 shadow-xs' : 'bg-amber-400 animate-ping'}`} />
               <span className="font-semibold truncate">
-                {user ? 'Encrypted cloud backup' : 'Offline sandbox mode'}
+                {user ? (user.isAnonymous ? 'Google Cloud Sync Active' : 'Encrypted cloud backup') : 'Offline sandbox mode'}
               </span>
             </div>
           </div>
@@ -1681,10 +1700,10 @@ export default function App() {
         <div className="p-4 border-t border-slate-800 bg-slate-950/20">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-full bg-slate-700 text-slate-200 font-extrabold flex items-center justify-center text-xs border border-slate-600/50 shrink-0">
-              {user ? user.email?.substring(0, 2).toUpperCase() : 'SLP'}
+              {user ? (user.email ? user.email.substring(0, 2).toUpperCase() : 'GS') : 'SLP'}
             </div>
             <div className="text-xs min-w-0 flex-1">
-              <p className="font-semibold text-slate-200 truncate">{user ? user.email : 'BRG'}</p>
+              <p className="font-semibold text-slate-200 truncate">{user ? (user.email || 'Cloud Guest Account') : 'BRG'}</p>
               <p className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">Senior SLP</p>
             </div>
           </div>
@@ -1817,7 +1836,7 @@ export default function App() {
                   <div className="mx-2 p-2.5 bg-slate-800/40 rounded-lg flex items-center gap-2 text-[10px] text-slate-400 border border-slate-800/60">
                     <div className={`w-2 h-2 rounded-full shrink-0 ${user ? 'bg-emerald-500 shadow-xs' : 'bg-amber-400 animate-ping'}`} />
                     <span className="font-semibold truncate">
-                      {user ? 'Cloud sync connected' : 'Offline local cache'}
+                      {user ? (user.isAnonymous ? 'Google Cloud Sync Active' : 'Cloud sync connected') : 'Offline local cache'}
                     </span>
                   </div>
                 </div>
@@ -1826,10 +1845,10 @@ export default function App() {
               <div className="p-4 border-t border-slate-800 bg-slate-950/20">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-full bg-slate-700 text-slate-200 font-extrabold flex items-center justify-center text-xs border border-slate-600/50 shrink-0">
-                    {user ? user.email?.substring(0, 2).toUpperCase() : 'SLP'}
+                    {user ? (user.email ? user.email.substring(0, 2).toUpperCase() : 'GS') : 'SLP'}
                   </div>
                   <div className="text-xs min-w-0 flex-1">
-                    <p className="font-semibold text-slate-200 truncate">{user ? user.email : 'BRG'}</p>
+                    <p className="font-semibold text-slate-200 truncate">{user ? (user.email || 'Cloud Guest Account') : 'BRG'}</p>
                     <p className="text-slate-500 text-[9px] uppercase font-bold tracking-wider">Senior SLP</p>
                   </div>
                 </div>
@@ -1910,18 +1929,31 @@ export default function App() {
             ) : user ? (
               <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-1 pl-2 rounded-lg">
                 <span className="hidden sm:inline text-[10px] font-semibold text-slate-500 mr-1 max-w-[120px] truncate">
-                  {user.email}
+                  {user.isAnonymous ? "Cloud Guest" : user.email}
                 </span>
-                <button
-                  type="button"
-                  onClick={handleLogActiveOut}
-                  className="p-1 px-2 text-slate-500 hover:text-red-600 hover:bg-red-50/50 rounded-md cursor-pointer transition text-[11px] font-bold flex items-center gap-1 border border-transparent hover:border-red-100"
-                  title="Sign Out"
-                  id="btn-sign-out"
-                >
-                  <LogOut size={12} />
-                  <span className="hidden md:inline">Logout</span>
-                </button>
+                {!user.isAnonymous ? (
+                  <button
+                    type="button"
+                    onClick={handleLogActiveOut}
+                    className="p-1 px-2 text-slate-500 hover:text-red-600 hover:bg-red-50/50 rounded-md cursor-pointer transition text-[11px] font-bold flex items-center gap-1 border border-transparent hover:border-red-100"
+                    title="Sign Out"
+                    id="btn-sign-out"
+                  >
+                    <LogOut size={12} />
+                    <span className="hidden md:inline">Logout</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleLogIn}
+                    className="p-1 px-1.5 text-blue-600 hover:bg-blue-50 hover:text-blue-700 rounded-md cursor-pointer transition text-[10px] font-bold flex items-center gap-1"
+                    title="Sign In with Google"
+                    id="btn-sign-in"
+                  >
+                    <LogIn size={11} />
+                    <span>Link Google</span>
+                  </button>
+                )}
               </div>
             ) : (
               <button
