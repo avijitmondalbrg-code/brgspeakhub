@@ -86,6 +86,218 @@ const safeLocalStorage = {
   }
 };
 
+// Setup OKLCH/OKLAB support interceptor for libraries like html2canvas
+const setupOklchInterceptor = () => {
+  let isRestored = false;
+  const originalGetComputedStyle = window.getComputedStyle;
+  
+  // Backup descriptor of CSSRule.prototype.cssText
+  const cssRuleProto = typeof CSSRule !== 'undefined' ? CSSRule.prototype : null;
+  const originalCssRuleTextDescriptor = cssRuleProto 
+    ? Object.getOwnPropertyDescriptor(cssRuleProto, 'cssText') 
+    : null;
+  
+  // Backup descriptor of CSSStyleDeclaration.prototype.cssText
+  const cssStyleDeclProto = typeof CSSStyleDeclaration !== 'undefined' ? CSSStyleDeclaration.prototype : null;
+  const originalStyleDeclTextDescriptor = cssStyleDeclProto 
+    ? Object.getOwnPropertyDescriptor(cssStyleDeclProto, 'cssText') 
+    : null;
+  
+  // Backup CSSStyleDeclaration.prototype.getPropertyValue
+  const originalGetPropertyValue = cssStyleDeclProto ? cssStyleDeclProto.getPropertyValue : null;
+
+  // Helper to translate OKLCH and OKLAB color formats back to safe equivalents (HSL/RGB)
+  const approximateOklchToHsl = (cssText: string): string => {
+    if (!cssText) return cssText;
+    
+    // Replace oklch() with equivalent hsl()
+    let result = cssText.replace(/oklch\(([^)]+)\)/g, (match, content) => {
+      try {
+        const parts = content.trim().split(/[\s,+/]+/);
+        if (parts.length < 3) return match;
+
+        let lStr = parts[0];
+        let cStr = parts[1];
+        let hStr = parts[2];
+        let aStr = parts[3];
+
+        let l = parseFloat(lStr);
+        if (lStr.includes('%')) l = l / 100;
+
+        let c = parseFloat(cStr);
+        if (cStr.includes('%')) c = c / 100;
+
+        let h = parseFloat(hStr);
+        if (hStr.includes('rad')) {
+          h = h * (180 / Math.PI);
+        } else if (hStr.includes('grad')) {
+          h = h * 0.9;
+        } else if (hStr.includes('turn')) {
+          h = h * 360;
+        }
+        if (isNaN(h)) h = 0;
+
+        const s = Math.min(100, Math.max(0, c * 250));
+        const lPct = Math.min(100, Math.max(0, l * 100));
+
+        if (aStr !== undefined) {
+          let a = parseFloat(aStr);
+          if (aStr.includes('%')) a = a / 100;
+          return `hsla(${h.toFixed(1)}, ${s.toFixed(1)}%, ${lPct.toFixed(1)}%, ${a})`;
+        } else {
+          return `hsl(${h.toFixed(1)}, ${s.toFixed(1)}%, ${lPct.toFixed(1)}%)`;
+        }
+      } catch {
+        return '#888888';
+      }
+    });
+
+    // Replace oklab() with equivalent rgb() 
+    result = result.replace(/oklab\(([^)]+)\)/g, (match, content) => {
+      try {
+        const parts = content.trim().split(/[\s,+/]+/);
+        if (parts.length < 3) return match;
+
+        let lStr = parts[0];
+        let aStr = parts[3];
+
+        let l = parseFloat(lStr);
+        if (lStr.includes('%')) l = l / 100;
+
+        const grayVal = Math.round(Math.min(255, Math.max(0, l * 255)));
+
+        if (aStr !== undefined) {
+          let a = parseFloat(aStr);
+          if (aStr.includes('%')) a = a / 100;
+          return `rgba(${grayVal}, ${grayVal}, ${grayVal}, ${a})`;
+        } else {
+          return `rgb(${grayVal}, ${grayVal}, ${grayVal})`;
+        }
+      } catch {
+        return '#888888';
+      }
+    });
+
+    return result;
+  };
+
+  // 1. Intercept CSSRule.prototype.cssText
+  if (cssRuleProto && originalCssRuleTextDescriptor && originalCssRuleTextDescriptor.get) {
+    try {
+      Object.defineProperty(cssRuleProto, 'cssText', {
+        configurable: true,
+        enumerable: true,
+        get() {
+          const val = originalCssRuleTextDescriptor.get!.call(this);
+          return typeof val === 'string' ? approximateOklchToHsl(val) : val;
+        },
+        set(newVal) {
+          if (originalCssRuleTextDescriptor.set) {
+            originalCssRuleTextDescriptor.set.call(this, newVal);
+          }
+        }
+      });
+    } catch (err) {
+      console.warn('Could not intercept CSSRule.prototype.cssText:', err);
+    }
+  }
+
+  // 2. Intercept CSSStyleDeclaration.prototype.cssText
+  if (cssStyleDeclProto && originalStyleDeclTextDescriptor && originalStyleDeclTextDescriptor.get) {
+    try {
+      Object.defineProperty(cssStyleDeclProto, 'cssText', {
+        configurable: true,
+        enumerable: true,
+        get() {
+          const val = originalStyleDeclTextDescriptor.get!.call(this);
+          return typeof val === 'string' ? approximateOklchToHsl(val) : val;
+        },
+        set(newVal) {
+          if (originalStyleDeclTextDescriptor.set) {
+            originalStyleDeclTextDescriptor.set.call(this, newVal);
+          }
+        }
+      });
+    } catch (err) {
+      console.warn('Could not intercept CSSStyleDeclaration.prototype.cssText:', err);
+    }
+  }
+
+  // 3. Intercept CSSStyleDeclaration.prototype.getPropertyValue
+  if (cssStyleDeclProto && originalGetPropertyValue) {
+    try {
+      cssStyleDeclProto.getPropertyValue = function(prop: string) {
+        const val = originalGetPropertyValue.call(this, prop);
+        return typeof val === 'string' ? approximateOklchToHsl(val) : val;
+      };
+    } catch (err) {
+      console.warn('Could not intercept getPropertyValue:', err);
+    }
+  }
+
+  // 4. Intercept window.getComputedStyle with Proxy
+  try {
+    (window as any).getComputedStyle = function (elt: Element, pseudoElt?: string | null): CSSStyleDeclaration {
+      const style = originalGetComputedStyle.call(window, elt, pseudoElt);
+      return new Proxy(style, {
+        get(target, prop) {
+          const val = Reflect.get(target, prop);
+          if (typeof val === 'function') {
+            return function(this: any, ...args: any[]) {
+              const res = val.apply(target, args);
+              return typeof res === 'string' ? approximateOklchToHsl(res) : res;
+            };
+          }
+          return typeof val === 'string' ? approximateOklchToHsl(val) : val;
+        }
+      });
+    };
+  } catch (proxyError) {
+    console.error('Could not set up window.getComputedStyle interceptor proxy:', proxyError);
+  }
+
+  const restore = () => {
+    if (isRestored) return;
+    isRestored = true;
+
+    // Restore CSSRule.prototype.cssText
+    if (cssRuleProto && originalCssRuleTextDescriptor) {
+      try {
+        Object.defineProperty(cssRuleProto, 'cssText', originalCssRuleTextDescriptor);
+      } catch (e) {
+        console.warn('Failed to restore CSSRule.prototype.cssText:', e);
+      }
+    }
+
+    // Restore CSSStyleDeclaration.prototype.cssText
+    if (cssStyleDeclProto && originalStyleDeclTextDescriptor) {
+      try {
+        Object.defineProperty(cssStyleDeclProto, 'cssText', originalStyleDeclTextDescriptor);
+      } catch (e) {
+        console.warn('Failed to restore CSSStyleDeclaration.prototype.cssText:', e);
+      }
+    }
+
+    // Restore CSSStyleDeclaration.prototype.getPropertyValue
+    if (cssStyleDeclProto && originalGetPropertyValue) {
+      try {
+        cssStyleDeclProto.getPropertyValue = originalGetPropertyValue;
+      } catch (e) {
+        console.warn('Failed to restore getPropertyValue:', e);
+      }
+    }
+
+    // Restore getComputedStyle
+    try {
+      (window as any).getComputedStyle = originalGetComputedStyle;
+    } catch (e) {
+      console.error('Could not restore getComputedStyle:', e);
+    }
+  };
+
+  return restore;
+};
+
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -747,177 +959,12 @@ export default function App() {
   // WhatsApp automatic sender and delivery pipeline
   const sendPDFToWhatsApp = async (plan: TherapyPlan) => {
     setIsSendingWhatsApp(plan.id);
-    let isRestored = false;
     setNotification({
       message: `Formulating clinical report PDF for patient "${plan.patientName}"...`,
       type: 'info'
     });
 
-    // Helper to translate OKLCH and OKLAB color formats back to safe equivalents (HSL/RGB)
-    const approximateOklchToHsl = (cssText: string): string => {
-      if (!cssText) return cssText;
-      
-      // Replace oklch() with equivalent hsl()
-      let result = cssText.replace(
-        /oklch\(\s*([0-9.]+%?)\s+([0-9.]+%?)\s+([0-9.]+%?|\w+)(?:\s*\/\s*([0-9.]+%?))?\s*\)/g,
-        (_, lStr, cStr, hStr, aStr) => {
-          try {
-            let l = parseFloat(lStr);
-            if (lStr.includes('%')) l = l / 100;
-            let c = parseFloat(cStr);
-            if (cStr.includes('%')) c = c / 100;
-            let h = parseFloat(hStr);
-            if (isNaN(h)) h = 0;
-            
-            // Saturation proxy: C * 250% (capped at 100%)
-            const s = Math.min(100, Math.max(0, c * 250));
-            const lPct = Math.min(100, Math.max(0, l * 100));
-            
-            if (aStr !== undefined) {
-              return `hsla(${h.toFixed(1)}, ${s.toFixed(1)}%, ${lPct.toFixed(1)}%, ${aStr})`;
-            } else {
-              return `hsl(${h.toFixed(1)}, ${s.toFixed(1)}%, ${lPct.toFixed(1)}%)`;
-            }
-          } catch {
-            return '#888888';
-          }
-        }
-      );
-
-      // Replace oklab() with equivalent rgb() 
-      result = result.replace(
-        /oklab\(\s*([0-9.]+%?)\s+([0-9.-]+%?)\s+([0-9.-]+%?)(?:\s*\/\s*([0-9.]+%?))?\s*\)/g,
-        (_, lStr, __, ___, alphaStr) => {
-          try {
-            let l = parseFloat(lStr);
-            if (lStr.includes('%')) l = l / 100;
-            const grayVal = Math.round(l * 255);
-            if (alphaStr !== undefined) {
-              return `rgba(${grayVal}, ${grayVal}, ${grayVal}, ${alphaStr})`;
-            } else {
-              return `rgb(${grayVal}, ${grayVal}, ${grayVal})`;
-            }
-          } catch {
-            return '#888888';
-          }
-        }
-      );
-
-      return result;
-    };
-
-    // 1. BACKUP & CLEAN ELEMENT STYLE TEXT IN DOM STYLETAGS
-    const styleElements = Array.from(document.querySelectorAll('style'));
-    const styleBackups: Array<{ element: HTMLStyleElement; originalText: string }> = [];
-    
-    try {
-      for (const styleElt of styleElements) {
-        const text = styleElt.textContent || '';
-        if (text.includes('oklch') || text.includes('oklab')) {
-          styleBackups.push({ element: styleElt, originalText: text });
-          styleElt.textContent = approximateOklchToHsl(text);
-        }
-      }
-    } catch (err) {
-      console.warn('Could not rewrite some custom styles text:', err);
-    }
-
-    // 2. STYLESHEET CSSOM SUB-RULES CLEANING WORKAROUND
-    const stylesBackup: Array<{
-      sheet: CSSStyleSheet;
-      rules: Array<{ index: number; cssText: string }>;
-    }> = [];
-
-    try {
-      for (let i = 0; i < document.styleSheets.length; i++) {
-        try {
-          const sheet = document.styleSheets[i];
-          const rules = sheet.cssRules || sheet.rules;
-          if (!rules) continue;
-          
-          const ruleBackup: Array<{ index: number; cssText: string }> = [];
-          for (let j = rules.length - 1; j >= 0; j--) {
-            const rule = rules[j];
-            if (rule && rule.cssText && (rule.cssText.includes('oklch') || rule.cssText.includes('oklab'))) {
-              ruleBackup.push({ index: j, cssText: rule.cssText });
-              sheet.deleteRule(j);
-            }
-          }
-          
-          if (ruleBackup.length > 0) {
-            ruleBackup.sort((a, b) => a.index - b.index);
-            stylesBackup.push({ sheet, rules: ruleBackup });
-          }
-        } catch (e) {
-          // Ignore cross-origin access errors
-          console.warn('Could not process some stylesheet rules:', e);
-        }
-      }
-    } catch (globalE) {
-      console.error('Error pre-filtering style rules:', globalE);
-    }
-
-    // 3. SECURE BROWSER COMPUTED STYLES INTERCEPTOR
-    const originalGetComputedStyle = window.getComputedStyle;
-    try {
-      (window as any).getComputedStyle = function (elt: Element, pseudoElt?: string | null): CSSStyleDeclaration {
-        const style = originalGetComputedStyle.call(window, elt, pseudoElt);
-        return new Proxy(style, {
-          get(target, prop) {
-            // Avoid passing the receiver (Proxy) which causes "Illegal invocation" for native getters
-            const val = Reflect.get(target, prop);
-            if (typeof val === 'function') {
-              return function(this: any, ...args: any[]) {
-                const res = val.apply(target, args);
-                if (typeof res === 'string' && (res.includes('oklch') || res.includes('oklab'))) {
-                  return approximateOklchToHsl(res);
-                }
-                return res;
-              };
-            }
-            if (typeof val === 'string' && (val.includes('oklch') || val.includes('oklab'))) {
-              return approximateOklchToHsl(val);
-            }
-            return val;
-          }
-        });
-      };
-    } catch (proxyError) {
-      console.error('Could not set up window.getComputedStyle interceptor proxy:', proxyError);
-    }
-
-    const restoreStyles = () => {
-      if (isRestored) return;
-      isRestored = true;
-      try {
-        (window as any).getComputedStyle = originalGetComputedStyle;
-      } catch (e) {
-        console.error('Could not restore getComputedStyle:', e);
-      }
-
-      for (const backup of styleBackups) {
-        try {
-          backup.element.textContent = backup.originalText;
-        } catch (e) {
-          console.warn('Could not restore style tag content:', e);
-        }
-      }
-
-      for (const backup of stylesBackup) {
-        const { sheet, rules } = backup;
-        for (const rule of rules) {
-          try {
-            sheet.insertRule(rule.cssText, rule.index);
-          } catch (restoreError) {
-            try {
-              sheet.insertRule(rule.cssText, sheet.cssRules.length);
-            } catch (fallbackError) {
-              console.warn('Failed to restore custom rule:', rule.cssText, fallbackError);
-            }
-          }
-        }
-      }
-    };
+    const restoreStyles = setupOklchInterceptor();
 
     try {
       const element = document.getElementById('clinical-report-paper');
@@ -1215,177 +1262,12 @@ export default function App() {
   const downloadReportAsPDF = async () => {
     if (!currentPlan) return;
     setIsExporting(true);
-    let isRestored = false;
     setNotification({
       message: 'Generating professional vector clinical report...',
       type: 'info'
     });
 
-    // Helper to translate OKLCH and OKLAB color formats back to safe equivalents (HSL/RGB)
-    const approximateOklchToHsl = (cssText: string): string => {
-      if (!cssText) return cssText;
-      
-      // Replace oklch() with equivalent hsl()
-      let result = cssText.replace(
-        /oklch\(\s*([0-9.]+%?)\s+([0-9.]+%?)\s+([0-9.]+%?|\w+)(?:\s*\/\s*([0-9.]+%?))?\s*\)/g,
-        (_, lStr, cStr, hStr, aStr) => {
-          try {
-            let l = parseFloat(lStr);
-            if (lStr.includes('%')) l = l / 100;
-            let c = parseFloat(cStr);
-            if (cStr.includes('%')) c = c / 100;
-            let h = parseFloat(hStr);
-            if (isNaN(h)) h = 0;
-            
-            // Saturation proxy: C * 250% (capped at 100%)
-            const s = Math.min(100, Math.max(0, c * 250));
-            const lPct = Math.min(100, Math.max(0, l * 100));
-            
-            if (aStr !== undefined) {
-              return `hsla(${h.toFixed(1)}, ${s.toFixed(1)}%, ${lPct.toFixed(1)}%, ${aStr})`;
-            } else {
-              return `hsl(${h.toFixed(1)}, ${s.toFixed(1)}%, ${lPct.toFixed(1)}%)`;
-            }
-          } catch {
-            return '#888888';
-          }
-        }
-      );
-
-      // Replace oklab() with equivalent rgb() 
-      result = result.replace(
-        /oklab\(\s*([0-9.]+%?)\s+([0-9.-]+%?)\s+([0-9.-]+%?)(?:\s*\/\s*([0-9.]+%?))?\s*\)/g,
-        (_, lStr, __, ___, alphaStr) => {
-          try {
-            let l = parseFloat(lStr);
-            if (lStr.includes('%')) l = l / 100;
-            const grayVal = Math.round(l * 255);
-            if (alphaStr !== undefined) {
-              return `rgba(${grayVal}, ${grayVal}, ${grayVal}, ${alphaStr})`;
-            } else {
-              return `rgb(${grayVal}, ${grayVal}, ${grayVal})`;
-            }
-          } catch {
-            return '#888888';
-          }
-        }
-      );
-
-      return result;
-    };
-
-    // 1. BACKUP & CLEAN ELEMENT STYLE TEXT IN DOM STYLETAGS
-    const styleElements = Array.from(document.querySelectorAll('style'));
-    const styleBackups: Array<{ element: HTMLStyleElement; originalText: string }> = [];
-    
-    try {
-      for (const styleElt of styleElements) {
-        const text = styleElt.textContent || '';
-        if (text.includes('oklch') || text.includes('oklab')) {
-          styleBackups.push({ element: styleElt, originalText: text });
-          styleElt.textContent = approximateOklchToHsl(text);
-        }
-      }
-    } catch (err) {
-      console.warn('Could not rewrite some custom styles text:', err);
-    }
-
-    // 2. STYLESHEET CSSOM SUB-RULES CLEANING WORKAROUND
-    const stylesBackup: Array<{
-      sheet: CSSStyleSheet;
-      rules: Array<{ index: number; cssText: string }>;
-    }> = [];
-
-    try {
-      for (let i = 0; i < document.styleSheets.length; i++) {
-        try {
-          const sheet = document.styleSheets[i];
-          const rules = sheet.cssRules || sheet.rules;
-          if (!rules) continue;
-          
-          const ruleBackup: Array<{ index: number; cssText: string }> = [];
-          for (let j = rules.length - 1; j >= 0; j--) {
-            const rule = rules[j];
-            if (rule && rule.cssText && (rule.cssText.includes('oklch') || rule.cssText.includes('oklab'))) {
-              ruleBackup.push({ index: j, cssText: rule.cssText });
-              sheet.deleteRule(j);
-            }
-          }
-          
-          if (ruleBackup.length > 0) {
-            ruleBackup.sort((a, b) => a.index - b.index);
-            stylesBackup.push({ sheet, rules: ruleBackup });
-          }
-        } catch (e) {
-          // Ignore cross-origin access errors
-          console.warn('Could not process some stylesheet rules:', e);
-        }
-      }
-    } catch (globalE) {
-      console.error('Error pre-filtering style rules:', globalE);
-    }
-
-    // 3. SECURE BROWSER COMPUTED STYLES INTERCEPTOR
-    const originalGetComputedStyle = window.getComputedStyle;
-    try {
-      (window as any).getComputedStyle = function (elt: Element, pseudoElt?: string | null): CSSStyleDeclaration {
-        const style = originalGetComputedStyle.call(window, elt, pseudoElt);
-        return new Proxy(style, {
-          get(target, prop) {
-            // Avoid passing the receiver (Proxy) which causes "Illegal invocation" for native getters
-            const val = Reflect.get(target, prop);
-            if (typeof val === 'function') {
-              return function(this: any, ...args: any[]) {
-                const res = val.apply(target, args);
-                if (typeof res === 'string' && (res.includes('oklch') || res.includes('oklab'))) {
-                  return approximateOklchToHsl(res);
-                }
-                return res;
-              };
-            }
-            if (typeof val === 'string' && (val.includes('oklch') || val.includes('oklab'))) {
-              return approximateOklchToHsl(val);
-            }
-            return val;
-          }
-        });
-      };
-    } catch (proxyError) {
-      console.error('Could not set up window.getComputedStyle interceptor proxy:', proxyError);
-    }
-
-    const restoreStyles = () => {
-      if (isRestored) return;
-      isRestored = true;
-      try {
-        (window as any).getComputedStyle = originalGetComputedStyle;
-      } catch (e) {
-        console.error('Could not restore getComputedStyle:', e);
-      }
-
-      for (const backup of styleBackups) {
-        try {
-          backup.element.textContent = backup.originalText;
-        } catch (e) {
-          console.warn('Could not restore style tag content:', e);
-        }
-      }
-
-      for (const backup of stylesBackup) {
-        const { sheet, rules } = backup;
-        for (const rule of rules) {
-          try {
-            sheet.insertRule(rule.cssText, rule.index);
-          } catch (restoreError) {
-            try {
-              sheet.insertRule(rule.cssText, sheet.cssRules.length);
-            } catch (fallbackError) {
-              console.warn('Failed to restore custom rule:', rule.cssText, fallbackError);
-            }
-          }
-        }
-      }
-    };
+    const restoreStyles = setupOklchInterceptor();
 
     try {
       const element = document.getElementById('clinical-report-paper');
@@ -3053,17 +2935,19 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-emerald-50/70 border border-emerald-100 rounded-lg p-3 space-y-1.5">
-                  <h6 className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider flex items-center gap-1">
-                    <span>💡 Meta Sandbox Mode / সমাধান</span>
+                <div className="bg-amber-50/70 border border-amber-200 rounded-lg p-3 space-y-1.5">
+                  <h6 className="text-[10px] font-bold text-amber-800 uppercase tracking-wider flex items-center gap-1">
+                    <span>💡 Meta Sandbox Mode & 24h Window / সমাধান</span>
                   </h6>
-                  <p className="text-[9.5px] text-emerald-950 font-bold leading-tight">
-                    আপনি যদি Meta-র Test Business Account ব্যবহার করেন, তবে রোগী বা প্রাপকের নম্বরটিকে আগে ভেরিফাই করতে হবে:
+                  <p className="text-[9.5px] text-amber-950 font-bold leading-tight">
+                    মেটার এপিআই ডেলিভারি সাকসেসফুল দেখালেও কেন হোয়াটসঅ্যাপে মেসেজ বা রিপোর্ট যাচ্ছে না?
                   </p>
-                  <p className="text-[9px] text-slate-700 leading-relaxed">
-                    1. <a href="https://developers.facebook.com" target="_blank" rel="noreferrer" className="text-emerald-700 underline font-bold">developers.facebook.com</a> এ গিয়ে আপনার App সিলেক্ট করুন। <br />
-                    2. বামদিকের Sidebar থেকে <strong>WhatsApp → API Setup</strong> এ যান। <br />
-                    3. মাঝখানের "To" dropdown থেকে <strong>Manage phone number list</strong> এ ক্লিক করে প্রাপকের নম্বরটি যোগ ও ওটিপি (OTP) দিয়ে ভেরিফাই করুন।
+                  <p className="text-[9px] text-slate-700 leading-relaxed space-y-1">
+                    ১. <strong>২৪ ঘন্টার নিয়মের উইন্ডো (মেটা রুল):</strong> মেটা নিয়ম অনুযায়ী নতুন নাম্বারে সরাসরি পিডিএফ বা কাস্টম মেসেজ পাঠানো যাবে না যতক্ষণ না রোগী আপনার মেটা টেস্ট নাম্বারে (যেমন: +1 555...) নিজে থেকে কোনো মেসেজ (যেমন "Hi") পাঠিয়ে চ্যাট উইন্ডো সচল করে। উইন্ডো সচল না থাকলে মেটা এপিআই ২০০ ওকে দিয়েও মেসেজ ড্রপ করে দেয়। <br />
+                    ২. <strong>স্যান্ডবক্স প্রাপক ভেরিফিকেশন:</strong> যদি ফেসবুক ডেভেলপার অ্যাকাউন্টে টেস্ট নম্বর ব্যবহার করেন, তবে প্রাপকের নম্বর অবশ্যই ভেরিফাইড হতে হবে:<br />
+                    - <a href="https://developers.facebook.com" target="_blank" rel="noreferrer" className="text-emerald-700 underline font-bold">developers.facebook.com</a> এ যান {"→"} আপনার App সিলেক্ট করুন। <br />
+                    - বামদিকের Sidebar থেকে <strong>WhatsApp {"→"} API Setup</strong> এ যান। <br />
+                    - "To" dropdown থেকে <strong>Manage phone number list</strong> এ ক্লিক করে প্রাপকের নম্বরটি ওটিপি দিয়ে ভেরিফাই করুন।
                   </p>
                 </div>
 
