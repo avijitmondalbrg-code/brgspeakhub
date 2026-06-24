@@ -3,13 +3,14 @@ import {
   FileText, Plus, Search, Trash2, Edit3, Save, ArrowLeft, Download, 
   Printer, CheckCircle2, AlertCircle, Calendar, User, Activity, Sparkles, 
   LogIn, LogOut, Cloud, CloudOff, RefreshCw, FileSignature, Layers, 
-  ChevronRight, HelpCircle, FileCheck, Check, Info, Menu, X, MessageSquare, Settings
+  ChevronRight, HelpCircle, FileCheck, Check, Info, Menu, X, MessageSquare, Settings, Link, Copy
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { auth, googleProvider, signInWithPopup } from './firebase';
+import { auth, googleProvider, signInWithPopup, db } from './firebase';
 import { onAuthStateChanged, signOut, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 import { TherapyPlan, WhatsAppSettings } from './types';
-import { saveTherapyPlan, deleteTherapyPlan, getTherapyPlans, saveWhatsAppSettings, getWhatsAppSettings } from './firebaseService';
+import { saveTherapyPlan, deleteTherapyPlan, getTherapyPlans, saveWhatsAppSettings, getWhatsAppSettings, getTherapyPlan } from './firebaseService';
 import SignaturePad from './components/SignaturePad';
 import { CLINICAL_TEMPLATES } from './clinicalTemplates';
 import html2canvas from 'html2canvas';
@@ -398,13 +399,21 @@ export default function App() {
   const [registerPin, setRegisterPin] = useState('');
   const [registering, setRegistering] = useState(false);
   const [isSendingWhatsApp, setIsSendingWhatsApp] = useState<string | null>(null);
+  const [isDiagnosticMode, setIsDiagnosticMode] = useState(false);
   const [whatsappSettings, setWhatsappSettings] = useState<WhatsAppSettings>({
     accessToken: safeLocalStorage.getItem('slp_wa_access_token') || 'EAAaIJ8yMa4sBRkR9hGWgaQPBZBxKqWbUzGOYcHDNc2eNTYee5KDUNlSMegxggjhqNYesll1ZBnxZBGkd8xPftzZAT68VIy8iibMMoD5zXkrJN1j0ZCXNH7QXxO7CZCqkr2QzayVKnki5lUu687dByehoeJIVn9rZCmfH493NKa6hvHBnVjKbhKrVnKhiPCAtaqgkwZDZD',
     phoneNumberId: safeLocalStorage.getItem('slp_wa_phone_number_id') || '1183533281504386',
     businessAccountId: safeLocalStorage.getItem('slp_wa_business_account_id') || '1323055779302168',
     templateName: safeLocalStorage.getItem('slp_wa_template_name') || 'hello_world',
-    langCode: safeLocalStorage.getItem('slp_wa_lang_code') || 'en_US'
+    langCode: safeLocalStorage.getItem('slp_wa_lang_code') || 'en_US',
+    sendMethod: (safeLocalStorage.getItem('slp_wa_send_method') as 'pdf' | 'link') || 'link'
   });
+
+  // Public single-report sharing view states
+  const [publicReportId, setPublicReportId] = useState<string | null>(null);
+  const [publicReportPlan, setPublicReportPlan] = useState<TherapyPlan | null>(null);
+  const [publicReportLoading, setPublicReportLoading] = useState(false);
+  const [publicReportError, setPublicReportError] = useState<string | null>(null);
   
   // Status notifications
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -423,7 +432,7 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (view !== 'form') return;
+    if (view !== 'form' && !publicReportId) return;
     const updateDimensions = () => {
       if (containerRef.current && printAreaRef.current) {
         const parentWidth = containerRef.current.clientWidth;
@@ -455,7 +464,7 @@ export default function App() {
       clearTimeout(timer);
       observer.disconnect();
     };
-  }, [view, currentPlan]);
+  }, [view, currentPlan, publicReportId, publicReportPlan]);
 
   // Authenticate monitor
   useEffect(() => {
@@ -479,6 +488,83 @@ export default function App() {
       }
     });
     return unsubscribe;
+  }, []);
+
+  // Check URL parameters for public shared report link
+  useEffect(() => {
+    const fullUrl = window.location.href;
+    const queryString = window.location.search;
+    const params = new URLSearchParams(queryString);
+    
+    // Log full URL and query string
+    console.log("Full URL:", fullUrl);
+    console.log("Query string:", queryString);
+
+    // Log all received URL query parameters
+    const queryParamsRecord: Record<string, string> = {};
+    params.forEach((val, key) => {
+      queryParamsRecord[key] = val;
+    });
+    console.log("All URL query parameters received:", queryParamsRecord);
+
+    // Extract report ID, checking 'id' first (preferred format) then fallback to 'report'
+    const reportIdFromUrl = params.get('id') || params.get('report');
+    console.log("Extracted report ID:", reportIdFromUrl);
+
+    if (!reportIdFromUrl) {
+      console.warn("Report ID is null! Unable to load public shared report. Detail of context:", {
+        href: fullUrl,
+        search: queryString,
+        allParams: queryParamsRecord
+      });
+    }
+    
+    if (reportIdFromUrl) {
+      setPublicReportId(reportIdFromUrl);
+      setPublicReportLoading(true);
+      
+      // Fetch the plan directly from Firestore
+      const loadPublicPlan = async () => {
+        try {
+          console.log("Loading report from Firestore:", {
+            collectionName: 'therapyPlans',
+            documentId: reportIdFromUrl
+          });
+          
+          const plan = await getTherapyPlan(reportIdFromUrl);
+          
+          console.log("Firestore query result:", {
+            collectionName: 'therapyPlans',
+            documentId: reportIdFromUrl,
+            found: !!plan,
+            data: plan
+          });
+
+          if (plan) {
+            setPublicReportPlan(plan);
+          } else {
+            setPublicReportError('Report not found or has been deleted. / রিপোর্টটি পাওয়া যায়নি বা মুছে ফেলা হয়েছে।');
+          }
+        } catch (err: any) {
+          console.error("Public report fetch failed with Firestore error:", err);
+          const rawErrorMsg = err.message || String(err);
+          let parsedError = rawErrorMsg;
+          try {
+            const parsed = JSON.parse(rawErrorMsg);
+            if (parsed && parsed.error) {
+              parsedError = parsed.error;
+            }
+          } catch (e) {
+            // Error is not a JSON string, use raw message
+          }
+          setPublicReportError(`Failed to load clinical report from server: ${parsedError} / সার্ভার থেকে রিপোর্ট লোড করা সম্ভব হয়নি: ${parsedError}`);
+        } finally {
+          setPublicReportLoading(false);
+        }
+      };
+      
+      loadPublicPlan();
+    }
   }, []);
 
   // Fetch plans from server or fell back to Local Storage
@@ -541,19 +627,21 @@ export default function App() {
         try {
           const cloudSettings = await getWhatsAppSettings(user.uid);
           if (cloudSettings) {
-            const merged = {
+            const merged: WhatsAppSettings = {
               accessToken: cloudSettings.accessToken || 'EAAaIJ8yMa4sBRkR9hGWgaQPBZBxKqWbUzGOYcHDNc2eNTYee5KDUNlSMegxggjhqNYesll1ZBnxZBGkd8xPftzZAT68VIy8iibMMoD5zXkrJN1j0ZCXNH7QXxO7CZCqkr2QzayVKnki5lUu687dByehoeJIVn9rZCmfH493NKa6hvHBnVjKbhKrVnKhiPCAtaqgkwZDZD',
               phoneNumberId: cloudSettings.phoneNumberId || '1183533281504386',
               businessAccountId: cloudSettings.businessAccountId || '1323055779302168',
               templateName: cloudSettings.templateName || 'hello_world',
-              langCode: cloudSettings.langCode || 'en_US'
+              langCode: cloudSettings.langCode || 'en_US',
+              sendMethod: cloudSettings.sendMethod || 'link'
             };
             setWhatsappSettings(merged);
             safeLocalStorage.setItem('slp_wa_access_token', merged.accessToken);
             safeLocalStorage.setItem('slp_wa_phone_number_id', merged.phoneNumberId);
             safeLocalStorage.setItem('slp_wa_business_account_id', merged.businessAccountId);
-            safeLocalStorage.setItem('slp_wa_template_name', merged.templateName);
-            safeLocalStorage.setItem('slp_wa_lang_code', merged.langCode);
+            safeLocalStorage.setItem('slp_wa_template_name', merged.templateName || 'hello_world');
+            safeLocalStorage.setItem('slp_wa_lang_code', merged.langCode || 'en_US');
+            safeLocalStorage.setItem('slp_wa_send_method', merged.sendMethod || 'link');
           }
         } catch (err) {
           console.error("Could not load WhatsApp configurations from Firestore:", err);
@@ -570,6 +658,7 @@ export default function App() {
     safeLocalStorage.setItem('slp_wa_business_account_id', settings.businessAccountId);
     safeLocalStorage.setItem('slp_wa_template_name', settings.templateName || 'hello_world');
     safeLocalStorage.setItem('slp_wa_lang_code', settings.langCode || 'en_US');
+    safeLocalStorage.setItem('slp_wa_send_method', settings.sendMethod || 'link');
 
     if (user) {
       try {
@@ -829,6 +918,7 @@ export default function App() {
       if (user) {
         // Secure Cloud Sync
         await saveTherapyPlan(currentPlan, !isEditing);
+        console.log("Saved report ID:", currentPlan.id);
         await loadPlans();
       } else {
         // Local Sync
@@ -959,6 +1049,221 @@ export default function App() {
   // WhatsApp automatic sender and delivery pipeline
   const sendPDFToWhatsApp = async (plan: TherapyPlan) => {
     setIsSendingWhatsApp(plan.id);
+
+    // 1. Validate and sanitize recipient phone number
+    console.log("WHATSAPP DEBUG: [start sendPDFToWhatsApp]");
+    console.log("WHATSAPP DEBUG: Original input patientPhone:", plan.patientPhone);
+    let sanitizedPhone = plan.patientPhone ? plan.patientPhone.replace(/\D/g, '') : '';
+    console.log("WHATSAPP DEBUG: After stripping non-digits:", sanitizedPhone);
+
+    if (sanitizedPhone.startsWith('00')) {
+      sanitizedPhone = sanitizedPhone.substring(2);
+      console.log("WHATSAPP DEBUG: Stripped leading '00':", sanitizedPhone);
+    }
+    
+    if (sanitizedPhone.startsWith('0') && !(sanitizedPhone.length === 11 && sanitizedPhone.startsWith('01'))) {
+      sanitizedPhone = sanitizedPhone.substring(1);
+      console.log("WHATSAPP DEBUG: Stripped single leading '0':", sanitizedPhone);
+    }
+
+    if (sanitizedPhone.length === 11 && sanitizedPhone.startsWith('01')) {
+      sanitizedPhone = '88' + sanitizedPhone;
+      console.log("WHATSAPP DEBUG: Bangladesh number formatted to:", sanitizedPhone);
+    } else if (sanitizedPhone.length === 10 && /^[6789]/.test(sanitizedPhone)) {
+      sanitizedPhone = '91' + sanitizedPhone;
+      console.log("WHATSAPP DEBUG: Indian number formatted to:", sanitizedPhone);
+    }
+
+    console.log("WHATSAPP DEBUG: Final sanitizedPhone:", sanitizedPhone);
+    console.log("WHATSAPP DEBUG: Phone Number ID:", whatsappSettings.phoneNumberId);
+
+    if (!sanitizedPhone) {
+      setNotification({
+        message: 'Valid patient phone number is missing / সঠিক ফোন নাম্বার পাওয়া যায়নি।',
+        type: 'error'
+      });
+      setIsSendingWhatsApp(null);
+      return;
+    }
+
+    // 2. Handle Temporary Diagnostic Mode
+    if (isDiagnosticMode) {
+      setNotification({
+        message: 'Diagnostic Mode Active: Sending a simple text message to test connectivity...',
+        type: 'info'
+      });
+      
+      try {
+        const textPayload = {
+          messaging_product: "whatsapp",
+          to: sanitizedPhone,
+          type: "text",
+          text: {
+            body: "WhatsApp API Test Message"
+          }
+        };
+
+        console.log("WHATSAPP DIAGNOSTIC: Sending text payload:", JSON.stringify(textPayload));
+
+        const sendRes = await fetch(`https://graph.facebook.com/v20.0/${whatsappSettings.phoneNumberId}/messages`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${whatsappSettings.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(textPayload)
+        });
+
+        const sendStatus = sendRes.status;
+        const sendResult = await sendRes.json();
+        console.log(`WHATSAPP DIAGNOSTIC SEND RESPONSE [Status: ${sendStatus}]:`, JSON.stringify(sendResult, null, 2));
+
+        if (!sendRes.ok) {
+          const code = sendResult.error?.code;
+          const msg = sendResult.error?.message || '';
+          console.error(`WHATSAPP DIAGNOSTIC SEND ERROR - Code: ${code}, Message: ${msg}`);
+          throw new Error(`Diagnostic send failed! Meta API Error [Code ${code}]: ${msg}`);
+        }
+
+        const messageId = sendResult.messages?.[0]?.id;
+        if (!messageId) {
+          throw new Error("Diagnostic send failed: No message ID returned in Meta response.");
+        }
+
+        setNotification({
+          message: `Diagnostic text message successfully sent to "${plan.patientName}" on WhatsApp! (Message ID: ${messageId}). Credentials and phone formatting are correct!`,
+          type: 'success'
+        });
+      } catch (err: any) {
+        console.error("WHATSAPP DIAGNOSTIC EXCEPTION:", err);
+        setNotification({
+          message: `WhatsApp diagnostic failed: ${err.message || 'Meta API error'}`,
+          type: 'error'
+        });
+      } finally {
+        setIsSendingWhatsApp(null);
+      }
+      return;
+    }
+
+    // 2.1 Deliver as Web Link option (High Reliability)
+    if (whatsappSettings.sendMethod === 'link') {
+      try {
+        // Verify that the document exists in Firestore before generating the URL
+        const docRef = doc(db, 'therapyPlans', plan.id);
+        const docSnap = await getDoc(docRef);
+        
+        console.log("Checking document existence for ID:", plan.id, "Exists:", docSnap.exists());
+        
+        if (!docSnap.exists()) {
+          throw new Error(`The report with ID ${plan.id} does not exist in the Firestore database. Please save/sync it first. / রিপোর্টটি ফায়ারস্টোর ডাটাবেসে পাওয়া যায়নি। অনুগ্রহ করে প্রথমে এটি সেভ বা সিঙ্ক করুন।`);
+        }
+
+        const reportLink = `${window.location.origin}/report?id=${plan.id}`;
+        console.log("Generated URL:", reportLink);
+
+        setNotification({
+          message: `Delivering secure report link to "${plan.patientName}" on WhatsApp...`,
+          type: 'info'
+        });
+
+        const linkPayload = {
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: sanitizedPhone,
+          type: "text",
+          text: {
+            preview_url: true,
+            body: `*Bengal Rehabilitation Group (BRG)*\n\nDear Parent/Patient,\nClinical Speech Assessment Report and Therapy Plan for *${plan.patientName}* is ready. You can view, print, and download the official report here:\n\n👉 ${reportLink}\n\nThank you for choosing BRG Speak HUB!`
+          }
+        };
+
+        console.log("WHATSAPP LINK: Sending text link payload:", JSON.stringify(linkPayload));
+
+        const sendRes = await fetch(`https://graph.facebook.com/v20.0/${whatsappSettings.phoneNumberId}/messages`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${whatsappSettings.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(linkPayload)
+        });
+
+        const sendStatus = sendRes.status;
+        const sendResult = await sendRes.json();
+        console.log(`WHATSAPP LINK SEND RESPONSE [Status: ${sendStatus}]:`, JSON.stringify(sendResult, null, 2));
+
+        if (!sendRes.ok) {
+          const code = sendResult.error?.code;
+          const msg = sendResult.error?.message || '';
+          
+          if (msg.toLowerCase().includes('authentication') || code === 190) {
+            throw new Error(`Authentication Error / অথেন্টিকেশন ত্রুটি:
+👉 Solution / সমাধান:
+আপনার Meta Access Token এবং Phone Number ID একে অপরের সাথে মেলেনি অথবা টোকেনের মেয়াদ শেষ হয়ে গেছে।`);
+          }
+          
+          // Fallback to approved template
+          if (code === 131030 || msg.toLowerCase().includes('window')) {
+            setNotification({
+              message: 'Active conversation window not open. Dispatching template fallback notification...',
+              type: 'info'
+            });
+
+            const templatePayload = {
+              messaging_product: "whatsapp",
+              to: sanitizedPhone,
+              type: "template",
+              template: {
+                name: whatsappSettings.templateName || "hello_world",
+                language: {
+                  code: whatsappSettings.langCode || "en_US"
+                }
+              }
+            };
+
+            const fallbackRes = await fetch(`https://graph.facebook.com/v20.0/${whatsappSettings.phoneNumberId}/messages`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${whatsappSettings.accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(templatePayload)
+            });
+
+            const fallbackResult = await fallbackRes.json();
+            if (!fallbackRes.ok) {
+              const fallbackMsg = fallbackResult.error?.message || '';
+              throw new Error(`Failed to send WhatsApp template fallback. Meta API replied: ${fallbackMsg}`);
+            }
+
+            setNotification({
+              message: `Template notification dispatched to "${plan.patientName}" perfectly! Please send a message back from the patient's phone to open the active 24h window for the direct report link.`,
+              type: 'success'
+            });
+            return;
+          }
+
+          throw new Error(`Meta API Error [Code ${code}]: ${msg}`);
+        }
+
+        const messageId = sendResult.messages?.[0]?.id;
+        setNotification({
+          message: `Clinical Report Web Link successfully sent to "${plan.patientName}" on WhatsApp! (Message ID: ${messageId})`,
+          type: 'success'
+        });
+      } catch (err: any) {
+        console.error("WHATSAPP LINK EXCEPTION:", err);
+        setNotification({
+          message: `WhatsApp link send failed: ${err.message || 'Meta API error'}`,
+          type: 'error'
+        });
+      } finally {
+        setIsSendingWhatsApp(null);
+      }
+      return;
+    }
+
     setNotification({
       message: `Formulating clinical report PDF for patient "${plan.patientName}"...`,
       type: 'info'
@@ -1045,10 +1350,13 @@ export default function App() {
         body: mediaFormData
       });
 
+      const uploadStatus = uploadRes.status;
+      const uploadData = await uploadRes.json();
+      console.log(`WHATSAPP MEDIA UPLOAD RESPONSE [Status: ${uploadStatus}]:`, JSON.stringify(uploadData, null, 2));
+
       if (!uploadRes.ok) {
-        const errorData = await uploadRes.json();
-        const errorMsg = errorData.error?.message || '';
-        const errorCode = errorData.error?.code;
+        const errorMsg = uploadData.error?.message || '';
+        const errorCode = uploadData.error?.code;
 
         if (errorMsg.toLowerCase().includes('authentication') || errorCode === 190) {
           throw new Error(`Authentication Error / অথেন্টিকেশন ত্রুটি:
@@ -1060,9 +1368,7 @@ export default function App() {
         throw new Error(errorMsg || 'Meta API Media Upload did not respond successfully.');
       }
 
-      const uploadData = await uploadRes.json();
       const mediaId = uploadData.id;
-
       if (!mediaId) {
         throw new Error('No media ID retrieved from Facebook Graph Servers.');
       }
@@ -1071,21 +1377,6 @@ export default function App() {
         message: 'Report uploaded. Delivering automated direct WhatsApp to patient...',
         type: 'info'
       });
-
-      let sanitizedPhone = plan.patientPhone ? plan.patientPhone.replace(/\D/g, '') : '';
-      if (sanitizedPhone) {
-        // Handle common Bangladesh format: e.g., 01712345678 (11 digits starting with 01)
-        if (sanitizedPhone.length === 11 && sanitizedPhone.startsWith('01')) {
-          sanitizedPhone = '88' + sanitizedPhone;
-        } 
-        // Handle common Indian format: 10 digits starting with 6, 7, 8, or 9
-        else if (sanitizedPhone.length === 10 && /^[6789]/.test(sanitizedPhone)) {
-          sanitizedPhone = '91' + sanitizedPhone;
-        }
-      }
-      if (!sanitizedPhone) {
-        throw new Error('Valid patient phone number is missing.');
-      }
 
       const messagePayload = {
         messaging_product: "whatsapp",
@@ -1108,10 +1399,13 @@ export default function App() {
         body: JSON.stringify(messagePayload)
       });
 
+      const sendStatus = sendRes.status;
+      const sendResult = await sendRes.json();
+      console.log(`WHATSAPP MESSAGE SEND RESPONSE [Status: ${sendStatus}]:`, JSON.stringify(sendResult, null, 2));
+
       if (!sendRes.ok) {
-        const sendError = await sendRes.json();
-        const code = sendError.error?.code;
-        const msg = sendError.error?.message || '';
+        const code = sendResult.error?.code;
+        const msg = sendResult.error?.message || '';
         
         if (msg.toLowerCase().includes('authentication') || code === 190) {
           throw new Error(`Authentication Error / অথেন্টিকেশন ত্রুটি:
@@ -1169,9 +1463,12 @@ export default function App() {
             body: JSON.stringify(templatePayload)
           });
 
+          const fallbackStatus = fallbackRes.status;
+          const fallbackResult = await fallbackRes.json();
+          console.log(`WHATSAPP FALLBACK MESSAGE RESPONSE [Status: ${fallbackStatus}]:`, JSON.stringify(fallbackResult, null, 2));
+
           if (!fallbackRes.ok) {
-            const fallbackErrorData = await fallbackRes.json();
-            const fallbackMsg = fallbackErrorData.error?.message || '';
+            const fallbackMsg = fallbackResult.error?.message || '';
             if (fallbackMsg.toLowerCase().includes('allowed list')) {
               throw new Error(`Recipient Phone Number not in authorized list (Meta Sandbox limit).
 👉 Solution / সমাধান:
@@ -1185,16 +1482,25 @@ export default function App() {
             throw new Error(`Failed to send WhatsApp warning alert. Meta API replied: ${fallbackMsg}`);
           }
 
+          const fallbackMsgId = fallbackResult.messages?.[0]?.id;
+          if (!fallbackMsgId) {
+            throw new Error("Meta fallback API responded with success status but did not return a valid WhatsApp Message ID.");
+          }
+
           setNotification({
-            message: `Template notification dispatched to "${plan.patientName}" on WhatsApp perfectly! (Could not attach document as no active 24-hour chat window exists yet)`,
+            message: `Template notification dispatched to "${plan.patientName}" on WhatsApp perfectly! (Message ID: ${fallbackMsgId}). (Could not attach document as no active 24-hour chat window exists yet)`,
             type: 'success'
           });
         } else {
           throw new Error(msg || 'Meta Messages endpoint returned an error.');
         }
       } else {
+        const messageId = sendResult.messages?.[0]?.id;
+        if (!messageId) {
+          throw new Error("Meta API responded with success status but did not return a valid WhatsApp Message ID.");
+        }
         setNotification({
-          message: `Direct PDF report successfully delivered to "${plan.patientName}" on WhatsApp, completely in the background!`,
+          message: `Direct PDF report successfully delivered to "${plan.patientName}" on WhatsApp! (Message ID: ${messageId})`,
           type: 'success'
         });
       }
@@ -1449,6 +1755,173 @@ export default function App() {
     });
   };
 
+  // High fidelity patient portal print integration
+  const printReportPublic = () => {
+    const element = document.getElementById('public-clinical-report-paper');
+    if (!element) return;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const iframeDoc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (!iframeDoc) return;
+
+    let headTags = '';
+    document.querySelectorAll('link, style').forEach((node) => {
+      headTags += node.outerHTML;
+    });
+
+    iframeDoc.open();
+    iframeDoc.write(`
+      <html>
+        <head>
+          <title>Clinical Speech Assessment Report - ${publicReportPlan?.patientName || 'Patient Copy'}</title>
+          ${headTags}
+          <style>
+            @media print {
+              @page {
+                size: A4;
+                margin: 15mm;
+              }
+              body {
+                background: white !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+              }
+            }
+            body {
+              font-family: 'Inter', sans-serif;
+              background-color: white;
+              padding: 0;
+              margin: 0;
+            }
+            #clinical-report-paper {
+              box-shadow: none !important;
+              width: 100% !important;
+              max-width: 210mm !important;
+              margin: 0 auto !important;
+              padding: 0 !important;
+            }
+          </style>
+        </head>
+        <body>
+          <div id="clinical-report-paper" class="bg-white text-slate-900 w-[210mm] min-h-[297mm] p-12 pr-14 pl-14 relative text-xs flex flex-col justify-between">
+            ${element.innerHTML}
+          </div>
+          <script>
+            window.onload = function() {
+              setTimeout(function() {
+                window.focus();
+                window.print();
+                setTimeout(function() {
+                  window.parent.document.body.removeChild(window.frameElement);
+                }, 500);
+              }, 500);
+            };
+          <\/script>
+        </body>
+      </html>
+    `);
+    iframeDoc.close();
+
+    setNotification({
+      message: 'Opening system print dialog...',
+      type: 'info'
+    });
+  };
+
+  // High fidelity patient portal PDF compile and export
+  const downloadReportAsPDFPublic = async () => {
+    if (!publicReportPlan) return;
+    setIsExporting(true);
+    setNotification({
+      message: 'Generating professional vector clinical report...',
+      type: 'info'
+    });
+
+    const restoreStyles = setupOklchInterceptor();
+
+    try {
+      const element = document.getElementById('public-clinical-report-paper');
+      if (!element) {
+        throw new Error('Preview element not found.');
+      }
+
+      const documentImages = Array.from(element.querySelectorAll('img'));
+      await Promise.all(
+        documentImages.map((img) => {
+          if (img.complete) return Promise.resolve();
+          return new Promise<void>((resolve) => {
+            img.onload = () => resolve();
+            img.onerror = () => resolve();
+          });
+        })
+      );
+
+      const canvas = await html2canvas(element, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+        backgroundColor: '#ffffff'
+      });
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      
+      pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`BRG-Speech-Report-${publicReportPlan.patientName.replace(/\\s+/g, '-')}.pdf`);
+
+      setNotification({
+        message: 'Clinical report downloaded successfully!',
+        type: 'success'
+      });
+    } catch (error: any) {
+      console.error('PDF public generation failed:', error);
+      setNotification({
+        message: `Failed to compile PDF: ${error.message || 'Rendering error'}`,
+        type: 'error'
+      });
+    } finally {
+      restoreStyles();
+      setIsExporting(false);
+    }
+  };
+
+  // Copy shareable public report web link
+  const copyShareLink = (planId: string) => {
+    if (!planId) return;
+    const reportLink = `${window.location.origin}/report?id=${planId}`;
+    console.log("Generated URL:", reportLink);
+    navigator.clipboard.writeText(reportLink).then(() => {
+      setNotification({
+        message: 'Shareable report link copied to clipboard! / রিপোর্ট লিংক ক্লিপবোর্ডে কপি হয়েছে!',
+        type: 'success'
+      });
+    }).catch((err) => {
+      console.error('Could not copy text: ', err);
+      setNotification({
+        message: 'Could not copy link automatically.',
+        type: 'error'
+      });
+    });
+  };
+
   // Filter plans list and deduplicate by ID to guarantee unique React keys
   const filteredPlans = (() => {
     const seen = new Set<string>();
@@ -1465,6 +1938,291 @@ export default function App() {
       );
     });
   })();
+
+  // Public patient shared report portal intercept
+  if (publicReportId) {
+    if (publicReportLoading) {
+      return (
+        <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white font-sans" id="public-portal-loading">
+          <div className="flex flex-col items-center gap-4">
+            <RefreshCw className="w-8 h-8 text-blue-500 animate-spin" />
+            <p className="text-sm font-bold tracking-wide animate-pulse">রিপোর্ট লোড হচ্ছে... / Loading report...</p>
+          </div>
+        </div>
+      );
+    }
+
+    if (publicReportError || !publicReportPlan) {
+      return (
+        <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white font-sans" id="public-portal-error">
+          <div className="max-w-md bg-slate-950 border border-slate-800 rounded-2xl p-8 text-center shadow-2xl">
+            <div className="w-16 h-16 bg-red-950 border border-red-900 rounded-full flex items-center justify-center mx-auto mb-6 text-red-500">
+              <AlertCircle size={28} />
+            </div>
+            <h3 className="text-sm font-bold tracking-tight uppercase text-white mb-2">Error / ত্রুটি</h3>
+            <p className="text-[11px] text-slate-400 font-semibold leading-relaxed mb-6">
+              {publicReportError || 'Report not found or has been removed. / রিপোর্টটি খুঁজে পাওয়া যায়নি বা মুছে ফেলা হয়েছে।'}
+            </p>
+            <a
+              href="/"
+              className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition inline-block"
+            >
+              Go to Homepage / হোমপেজে ফিরে যান
+            </a>
+          </div>
+        </div>
+      );
+    }
+
+    // Render public patient shared report portal
+    return (
+      <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans overflow-y-auto pb-12" id="vocalis-public-report-root">
+        
+        {/* TOP COMPACT HEADER */}
+        <header className="bg-slate-950 border-b border-slate-800 py-3.5 px-6 sticky top-0 z-50 shadow-md">
+          <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded bg-white flex items-center justify-center p-0.5 text-slate-900 font-black shrink-0 shadow-sm">
+                BRG
+              </div>
+              <div>
+                <h2 className="text-xs font-black tracking-tight uppercase text-white">BRG Clinical Report Portal</h2>
+                <p className="text-[10px] text-blue-400 font-bold uppercase tracking-wider">Bengal Rehabilitation Group</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+              <button
+                type="button"
+                onClick={printReportPublic}
+                className="flex-1 sm:flex-none py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+              >
+                <Printer size={13} />
+                <span>Print / প্রিন্ট করুন</span>
+              </button>
+              <button
+                type="button"
+                onClick={downloadReportAsPDFPublic}
+                disabled={isExporting}
+                className="flex-1 sm:flex-none py-2 px-4 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 font-bold text-xs rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50"
+              >
+                {isExporting ? <RefreshCw size={13} className="animate-spin" /> : <Download size={13} />}
+                <span>Download PDF / ডাউনলোড</span>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* NOTIFICATION TOAST BAR */}
+        <AnimatePresence>
+          {notification && (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="fixed top-16 left-1/2 transform -translate-x-1/2 z-[100] max-w-sm w-full px-4"
+            >
+              <div className={`rounded-xl p-3.5 border shadow-xl flex items-start gap-2.5 backdrop-blur-md ${
+                notification.type === 'success' ? 'bg-emerald-950/90 border-emerald-800 text-emerald-200' :
+                notification.type === 'error' ? 'bg-red-950/90 border-red-900 text-red-200' :
+                'bg-slate-900/95 border-slate-800 text-blue-200'
+              }`}>
+                <Info size={16} className="shrink-0 mt-0.5" />
+                <p className="text-[11px] font-bold leading-relaxed">{notification.message}</p>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* CONTAINER WORKSPACE */}
+        <main className="max-w-5xl mx-auto p-4 md:p-8 flex flex-col items-center gap-6 w-full">
+          
+          {/* Friendly Bengali instruction card */}
+          <div className="w-full max-w-[210mm] bg-blue-950/30 border border-blue-900 rounded-xl p-4 text-left shadow-sm">
+            <div className="flex gap-3">
+              <div className="text-blue-400 mt-0.5 shrink-0">
+                <FileText size={16} />
+              </div>
+              <div>
+                <h4 className="text-[11px] font-bold text-blue-200 uppercase tracking-wide">
+                  Clinical Assessment Report & Home Program / অ্যাসেসমেন্ট ও থেরাপি প্ল্যান
+                </h4>
+                <p className="text-[10px] text-slate-350 leading-relaxed mt-1">
+                  সম্মানিত অভিভাবক/রোগী, এটি <strong>Bengal Rehabilitation Group (BRG)</strong> এর অফিশিয়াল ক্লিনিকাল স্পিচ অ্যাসেসমেন্ট রিপোর্ট ও হোম রিহ্যাবিলিটেশন থেরাপি প্ল্যান। আপনি উপরে অবস্থিত <strong>"Download PDF"</strong> বাটনে ক্লিক করে রিপোর্টটি ডাউনলোড করে রাখতে পারেন।
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Canvas simulation container with auto-scaler for fluid responsive display */}
+          <div 
+            ref={containerRef} 
+            className="bg-slate-850 rounded-2xl p-4 md:p-6 border border-slate-800 overflow-hidden relative flex justify-center w-full shadow-inner"
+            style={{ height: previewHeight ? `${previewHeight + 24}px` : 'auto', minHeight: '500px' }}
+          >
+            <div
+              style={{
+                transform: `translateX(-50%) scale(${previewScale})`,
+                transformOrigin: 'top center',
+                width: '210mm',
+                position: 'absolute',
+                left: '50%',
+                top: '24px',
+              }}
+            >
+              <div 
+                ref={printAreaRef}
+                id="public-clinical-report-paper"
+                className="bg-white text-slate-900 w-[210mm] min-h-[297mm] p-12 pr-14 pl-14 shadow-2xl relative text-xs flex flex-col justify-between rounded-md"
+              >
+                <div className="space-y-5">
+                  
+                  {/* Letterhead */}
+                  <div className="border-b-2 border-blue-600 pb-3 flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded border border-slate-150 shadow-sm bg-white flex items-center justify-center p-0.5 text-slate-950 font-black">
+                        BRG
+                      </div>
+                      <div>
+                        <h2 className="text-sm font-extrabold tracking-tight text-slate-950 uppercase leading-none">BRG Speak HUB</h2>
+                        <p className="text-[8px] text-slate-400 font-bold uppercase tracking-wider mt-1">Bengal Rehabilitation Group • Clinical Speech Assessment</p>
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-[8px] font-bold text-slate-450 uppercase tracking-widest">Assessment Record</p>
+                      <span className="text-[9px] font-bold text-blue-800 bg-blue-50 px-1.5 py-0.5 rounded mt-0.5 inline-block">FORM NO: SLP-X781</span>
+                    </div>
+                  </div>
+
+                  {/* Info grid */}
+                  <div className="grid grid-cols-3 gap-x-4 gap-y-2 bg-slate-50 p-3 rounded-lg border border-slate-100/80">
+                    <div>
+                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Patient Name</span>
+                      <span className="text-xs font-bold text-slate-900 capitalize mt-0.5 block">{publicReportPlan.patientName || '_________________'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Patient Phone</span>
+                      <span className="text-[11px] font-semibold text-slate-800 mt-0.5 block">{publicReportPlan.patientPhone || '_________________'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Evaluation Date</span>
+                      <span className="text-[11px] font-semibold text-slate-800 mt-0.5 block">{publicReportPlan.date || '_________________'}</span>
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Age </span>
+                      <span className="text-[11px] font-semibold text-slate-800 mt-0.5 block">
+                        {publicReportPlan.age ? `${publicReportPlan.age}` : '_____'} / {publicReportPlan.gender || '_____'}
+                      </span>
+                    </div>
+                    <div className="col-span-2">
+                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Planned Review</span>
+                      <span className="text-[11px] font-semibold text-slate-800 mt-0.5 block">{publicReportPlan.reviewDate || '_________________'}</span>
+                    </div>
+                  </div>
+
+                  {/* provisional profile */}
+                  <div className="space-y-1 bg-blue-50/30 border-l-4 border-blue-600 p-2.5 rounded-r-md">
+                    <h4 className="text-[9px] font-bold text-blue-900 uppercase tracking-wider">Provisional Diagnostic Impressions:</h4>
+                    <p className="text-xs font-semibold text-slate-850 leading-relaxed">{publicReportPlan.provisionalDiagnosis || 'Diagnosis is pending active evaluation outcomes.'}</p>
+                  </div>
+
+                  {/* concerns */}
+                  <div className="space-y-0.5">
+                    <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Presenting Concerns</h4>
+                    <div className="h-[0.5px] bg-slate-100 w-full mb-1" />
+                    <p className="text-[11px] text-slate-800 leading-relaxed whitespaces-pre-line">{publicReportPlan.presentConcerns || 'No concerns recorded.'}</p>
+                  </div>
+
+                  {/* assessment */}
+                  <div className="space-y-0.5">
+                    <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Clinical Observations & Findings</h4>
+                    <div className="h-[0.5px] bg-slate-100 w-full mb-1" />
+                    <p className="text-[11px] text-slate-800 leading-relaxed whitespaces-pre-line">{publicReportPlan.assessmentFindings || 'Specific formal assessment observations are pending.'}</p>
+                  </div>
+
+                  {/* plan bullet points */}
+                  <div className="space-y-1.5">
+                    <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider font-sans">Therapy Target Objectives Bullet Plan</h4>
+                    <div className="h-[0.5px] bg-slate-100 w-full mb-1" />
+                    
+                    <ol className="space-y-1.5" id="pdf-goals-list">
+                      {publicReportPlan.therapyPlan.filter(g => g.trim() !== '').length === 0 ? (
+                        <li className="text-[11px] text-slate-400 italic">No objectives have been logged yet.</li>
+                      ) : (
+                        publicReportPlan.therapyPlan
+                          .filter(g => g.trim() !== '')
+                          .map((goal, i) => (
+                            <li key={i} className="flex gap-2 items-start text-[11px] text-slate-800 leading-relaxed">
+                              <span className="w-3.5 h-3.5 bg-blue-50 rounded text-blue-800 text-[9px] font-extrabold flex items-center justify-center shrink-0 mt-0.5">
+                                {i + 1}
+                              </span>
+                              <span>{goal}</span>
+                            </li>
+                          ))
+                      )}
+                    </ol>
+                  </div>
+
+                  {/* homework advice */}
+                  <div className="space-y-0.5">
+                    <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Suggestions & Home Advice Program</h4>
+                    <div className="h-[0.5px] bg-slate-100 w-full mb-1" />
+                    <p className="text-[11px] text-slate-800 leading-relaxed whitespaces-pre-line">{publicReportPlan.adviceHomeProgram || 'Direct home drills and guidelines will follow.'}</p>
+                  </div>
+
+                  {/* recommendation */}
+                  <div className="space-y-0.5">
+                    <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Clinician Recommendations path</h4>
+                    <div className="h-[0.5px] bg-slate-100 w-full mb-1" />
+                    <p className="text-[11px] text-slate-800 leading-relaxed whitespaces-pre-line">{publicReportPlan.recommendations || 'No further path defined at this phase.'}</p>
+                  </div>
+
+                </div>
+
+                {/* verification footer */}
+                <div className="pt-4 border-t border-slate-200 mt-6 shrink-0">
+                  <div className="flex justify-between items-end">
+                    <div className="space-y-1">
+                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Prescribed Frequency</span>
+                      <span className="text-[10px] font-semibold text-slate-800 block bg-slate-100 py-0.5 px-2 rounded border border-slate-200 inline-block">
+                        {publicReportPlan.frequencyOfTherapy || 'As scheduled'}
+                      </span>
+                    </div>
+
+                    <div className="text-right space-y-1">
+                      {publicReportPlan.therapistSignature ? (
+                        <div className="inline-block border border-slate-100 rounded p-1 bg-white max-w-[100px] mb-1">
+                          <img 
+                            src={publicReportPlan.therapistSignature} 
+                            alt="Clinician sign seal" 
+                            className="max-h-10 max-w-full object-contain mx-auto" 
+                            referrerPolicy="no-referrer"
+                          />
+                        </div>
+                      ) : (
+                        <div className="h-8 w-24 border-b border-dashed border-slate-200 mb-1 flex items-center justify-center">
+                          <span className="text-[8px] text-slate-350">Signature Stamp</span>
+                        </div>
+                      )}
+
+                      <span className="text-[11px] font-bold text-slate-900 block leading-none capitalize">
+                        {publicReportPlan.therapistName || 'Active Speech Therapist'}
+                      </span>
+                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest block mt-1">
+                        Registered Speech Therapist
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="flex bg-slate-100 font-sans text-slate-900 h-screen w-screen overflow-hidden" id="vocalis-app-root">
@@ -1794,6 +2552,16 @@ export default function App() {
               <div className="flex gap-2 mr-2">
                 <button
                   type="button"
+                  onClick={() => copyShareLink(currentPlan?.id)}
+                  className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 bg-white hover:bg-slate-50 flex items-center gap-1.5 transition-all shadow-xs shrink-0 cursor-pointer"
+                  id="h-btn-copy-link"
+                  title="Copy public link to share"
+                >
+                  <Copy size={13} />
+                  <span className="hidden sm:inline">Copy Link</span>
+                </button>
+                <button
+                  type="button"
                   onClick={downloadReportAsPDF}
                   disabled={isExporting}
                   className="px-3.5 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 bg-white hover:bg-slate-50 flex items-center gap-1.5 transition-all shadow-xs shrink-0 cursor-pointer disabled:opacity-50"
@@ -2069,7 +2837,17 @@ export default function App() {
                             {plan.therapistSignature ? "Signed" : "Draft"}
                           </span>
 
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 font-sans">
+                            <button
+                              type="button"
+                              onClick={() => copyShareLink(plan.id)}
+                              className="p-1.5 text-slate-500 hover:text-blue-600 bg-white border border-slate-200 rounded hover:border-blue-200 cursor-pointer transition shadow-xs"
+                              title="Copy Share Link"
+                              id={`btn-copy-link-hist-${plan.id}`}
+                            >
+                              <Copy size={11} />
+                            </button>
+
                             <button
                               type="button"
                               onClick={() => triggerWhatsAppFromHistory(plan)}
@@ -2510,6 +3288,16 @@ export default function App() {
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
+                      onClick={() => copyShareLink(currentPlan?.id)}
+                      className="py-1 px-2.5 bg-slate-700 hover:bg-slate-800 text-white font-bold text-[10px] rounded-md cursor-pointer transition-all flex items-center gap-1 shrink-0"
+                      id="btn-copy-report-link"
+                      title="Copy public link to share"
+                    >
+                      <Copy size={11} />
+                      <span>Copy Link</span>
+                    </button>
+                    <button
+                      type="button"
                       onClick={triggerWhatsAppDirect}
                       disabled={isSendingWhatsApp === currentPlan?.id}
                       className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] rounded-md cursor-pointer transition-all flex items-center gap-1 shrink-0 disabled:opacity-50"
@@ -2775,7 +3563,8 @@ export default function App() {
                     phoneNumberId: (formData.get('phoneNumberId') as string || '').trim(),
                     businessAccountId: (formData.get('businessAccountId') as string || '').trim(),
                     templateName: (formData.get('templateName') as string || '').trim() || 'hello_world',
-                    langCode: (formData.get('langCode') as string || '').trim() || 'en_US'
+                    langCode: (formData.get('langCode') as string || '').trim() || 'en_US',
+                    sendMethod: formData.get('sendMethod') as 'pdf' | 'link'
                   });
                 }}
                 className="p-5 space-y-4"
@@ -2864,6 +3653,73 @@ export default function App() {
                   <p className="text-[9px] text-slate-400 mt-1 leading-[1.3]">
                     Template name and languages are triggered as fallback automatically if the active 24h window constraint is hit. Default template approved by Meta is <strong>hello_world</strong>.
                   </p>
+                </div>
+
+                {/* WHATSAPP SEND METHOD SELECTION */}
+                <div className="border-t border-slate-150 pt-3.5 mt-3.5 space-y-2">
+                  <h5 className="text-[10px] font-bold text-slate-700 uppercase tracking-wider">Report Send Format / পাঠানোর ফরম্যাট</h5>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <label className={`flex flex-col p-2.5 rounded-lg border text-left cursor-pointer transition-all ${
+                      whatsappSettings.sendMethod === 'link' 
+                        ? 'border-emerald-500 bg-emerald-50/5' 
+                        : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100/50'
+                    }`}>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="radio"
+                          name="sendMethod"
+                          value="link"
+                          defaultChecked={whatsappSettings.sendMethod === 'link'}
+                          className="h-3.5 w-3.5 text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                        />
+                        <span className="text-[11px] font-bold text-slate-900">Web Link (রিপোর্ট লিংক)</span>
+                      </div>
+                      <span className="text-[9px] text-slate-500 mt-1 leading-[1.3] font-medium">
+                        ৯৯.৯% ডেলিভারি রেট। রোগী সরাসরি লিংকে ক্লিক করে ইন্টারঅ্যাক্টিভ রিপোর্ট পড়তে পারবেন।
+                      </span>
+                    </label>
+
+                    <label className={`flex flex-col p-2.5 rounded-lg border text-left cursor-pointer transition-all ${
+                      whatsappSettings.sendMethod === 'pdf' 
+                        ? 'border-emerald-500 bg-emerald-50/5' 
+                        : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100/50'
+                    }`}>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="radio"
+                          name="sendMethod"
+                          value="pdf"
+                          defaultChecked={whatsappSettings.sendMethod === 'pdf'}
+                          className="h-3.5 w-3.5 text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                        />
+                        <span className="text-[11px] font-bold text-slate-900">Direct PDF (পিডিএফ ফাইল)</span>
+                      </div>
+                      <span className="text-[9px] text-slate-500 mt-1 leading-[1.3] font-medium">
+                        সরাসরি হোয়াটসঅ্যাপে পিডিএফ ডকুমেন্ট ফাইল হিসেবে পাঠানো। মেটা ক্লাউড আপলোড নির্ভর।
+                      </span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* TEMPORARY DIAGNOSTIC MODE TOGGLE */}
+                <div className="border-t border-slate-150 pt-3.5 mt-3.5 space-y-3">
+                  <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                    <input
+                      type="checkbox"
+                      id="isDiagnosticMode"
+                      checked={isDiagnosticMode}
+                      onChange={(e) => setIsDiagnosticMode(e.target.checked)}
+                      className="mt-0.5 rounded border-slate-300 text-amber-600 focus:ring-amber-500 h-3.5 w-3.5 cursor-pointer"
+                    />
+                    <div>
+                      <label htmlFor="isDiagnosticMode" className="block text-[11px] font-bold text-amber-900 cursor-pointer select-none">
+                        ⚠️ Temporary Diagnostic Mode / ডায়াগনস্টিক টেস্ট মোড
+                      </label>
+                      <p className="text-[9px] text-slate-600 mt-1 leading-[1.3]">
+                        সক্রিয় থাকলে, এটি পিডিএফ জেনারেশন এবং আপলোড বাদ দিয়ে সরাসরি একটি সাধারণ টেক্সট মেসেজ ("WhatsApp API Test Message") রোগীর নম্বরে পাঠাবে। এর মাধ্যমে এপিআই টোকেন ও প্রাপক নম্বর ভেরিফিকেশন খুব দ্রুত সনাক্ত করা সম্ভব।
+                      </p>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="border-t border-slate-150 pt-3.5 mt-3.5 space-y-3 bg-slate-50 p-3 rounded-lg border border-slate-200">

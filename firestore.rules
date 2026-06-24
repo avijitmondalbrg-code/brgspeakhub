@@ -36,7 +36,7 @@ service cloud.firestore {
 
     // 4. Therapy Plans collection matching rules
     match /therapyPlans/{planId} {
-      allow get: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow get: if true;
       
       allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
 

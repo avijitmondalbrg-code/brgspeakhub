@@ -53,6 +53,7 @@ export async function saveTherapyPlan(plan: Omit<TherapyPlan, 'createdAt' | 'upd
     }
 
     await setDoc(docRef, payload);
+    console.log("Saved report ID:", plan.id);
   } catch (error) {
     handleFirestoreError(error, isNew ? 'create' : 'update', path);
   }

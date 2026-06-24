@@ -28,6 +28,7 @@ export interface WhatsAppSettings {
   businessAccountId: string;
   templateName?: string;
   langCode?: string;
+  sendMethod?: 'pdf' | 'link';
 }
 
 export interface FirestoreErrorInfo {
