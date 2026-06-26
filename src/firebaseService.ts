@@ -61,14 +61,19 @@ export async function saveTherapyPlan(plan: Omit<TherapyPlan, 'createdAt' | 'upd
 
 export async function getTherapyPlan(planId: string): Promise<TherapyPlan | null> {
   const path = `${COLLECTION_NAME}/${planId}`;
+  console.log("Collection:", COLLECTION_NAME);
+  console.log("Document ID:", planId);
   try {
     const docRef = doc(db, COLLECTION_NAME, planId);
     const docSnap = await getDoc(docRef);
+    console.log("Document exists:", docSnap.exists());
     if (docSnap.exists()) {
+      console.log("Document data:", docSnap.data());
       return { id: docSnap.id, ...docSnap.data() } as TherapyPlan;
     }
     return null;
   } catch (error) {
+    console.error("Firestore Error:", error);
     handleFirestoreError(error, 'get', path);
     return null;
   }

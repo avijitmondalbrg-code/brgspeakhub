@@ -404,8 +404,9 @@ export default function App() {
     accessToken: safeLocalStorage.getItem('slp_wa_access_token') || 'EAAaIJ8yMa4sBRkR9hGWgaQPBZBxKqWbUzGOYcHDNc2eNTYee5KDUNlSMegxggjhqNYesll1ZBnxZBGkd8xPftzZAT68VIy8iibMMoD5zXkrJN1j0ZCXNH7QXxO7CZCqkr2QzayVKnki5lUu687dByehoeJIVn9rZCmfH493NKa6hvHBnVjKbhKrVnKhiPCAtaqgkwZDZD',
     phoneNumberId: safeLocalStorage.getItem('slp_wa_phone_number_id') || '1183533281504386',
     businessAccountId: safeLocalStorage.getItem('slp_wa_business_account_id') || '1323055779302168',
-    templateName: safeLocalStorage.getItem('slp_wa_template_name') || 'hello_world',
-    langCode: safeLocalStorage.getItem('slp_wa_lang_code') || 'en_US',
+    templateName: safeLocalStorage.getItem('slp_wa_template_name') || 'speech_report_ready',
+    utilityTemplateName: safeLocalStorage.getItem('slp_wa_utility_template_name') || 'speech_report_ready',
+    langCode: safeLocalStorage.getItem('slp_wa_lang_code') || 'en',
     sendMethod: (safeLocalStorage.getItem('slp_wa_send_method') as 'pdf' | 'link') || 'link'
   });
 
@@ -414,6 +415,31 @@ export default function App() {
   const [publicReportPlan, setPublicReportPlan] = useState<TherapyPlan | null>(null);
   const [publicReportLoading, setPublicReportLoading] = useState(false);
   const [publicReportError, setPublicReportError] = useState<string | null>(null);
+  
+  // WhatsApp pre-send confirmation popup state
+  const [whatsAppConfirmData, setWhatsAppConfirmData] = useState<{
+    recipient: string;
+    messageText: string;
+    onConfirm: () => void;
+    onCancel: () => void;
+  } | null>(null);
+
+  const confirmWhatsAppMessage = (recipient: string, messageText: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      setWhatsAppConfirmData({
+        recipient,
+        messageText,
+        onConfirm: () => {
+          setWhatsAppConfirmData(null);
+          resolve(true);
+        },
+        onCancel: () => {
+          setWhatsAppConfirmData(null);
+          resolve(false);
+        }
+      });
+    });
+  };
   
   // Status notifications
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -492,62 +518,60 @@ export default function App() {
 
   // Check URL parameters for public shared report link
   useEffect(() => {
+    // Log exactly requested debug information
+    console.log("Full URL:", window.location.href);
+    console.log("Search:", window.location.search);
+
+    const params = new URLSearchParams(window.location.search);
+    console.log("All params:", Object.fromEntries(params.entries()));
+
+    // Verify which parameter name is expected: 'id'
+    const reportId = params.get("id");
+    console.log("Extracted report ID:", reportId);
+
+    // Backward compatibility or warning helper
     const fullUrl = window.location.href;
     const queryString = window.location.search;
-    const params = new URLSearchParams(queryString);
-    
-    // Log full URL and query string
-    console.log("Full URL:", fullUrl);
-    console.log("Query string:", queryString);
 
-    // Log all received URL query parameters
-    const queryParamsRecord: Record<string, string> = {};
-    params.forEach((val, key) => {
-      queryParamsRecord[key] = val;
-    });
-    console.log("All URL query parameters received:", queryParamsRecord);
-
-    // Extract report ID, checking 'id' first (preferred format) then fallback to 'report'
-    const reportIdFromUrl = params.get('id') || params.get('report');
-    console.log("Extracted report ID:", reportIdFromUrl);
-
-    if (!reportIdFromUrl) {
+    if (!reportId) {
       console.warn("Report ID is null! Unable to load public shared report. Detail of context:", {
         href: fullUrl,
         search: queryString,
-        allParams: queryParamsRecord
+        allParams: Object.fromEntries(params.entries())
       });
     }
     
-    if (reportIdFromUrl) {
-      setPublicReportId(reportIdFromUrl);
+    if (reportId) {
+      setPublicReportId(reportId);
       setPublicReportLoading(true);
       
       // Fetch the plan directly from Firestore
       const loadPublicPlan = async () => {
+        const collectionName = 'therapyPlans';
+        
+        // Before querying Firestore
+        console.log("collection name", collectionName);
+        console.log("Document ID:", reportId);
+        
         try {
-          console.log("Loading report from Firestore:", {
-            collectionName: 'therapyPlans',
-            documentId: reportIdFromUrl
-          });
+          const docRef = doc(db, collectionName, reportId);
+          const docSnap = await getDoc(docRef);
           
-          const plan = await getTherapyPlan(reportIdFromUrl);
+          // After Firestore query
+          console.log("doc exists", docSnap.exists());
           
-          console.log("Firestore query result:", {
-            collectionName: 'therapyPlans',
-            documentId: reportIdFromUrl,
-            found: !!plan,
-            data: plan
-          });
-
-          if (plan) {
-            setPublicReportPlan(plan);
+          if (docSnap.exists()) {
+            console.log("document data", docSnap.data());
+            const planData = { id: docSnap.id, ...docSnap.data() } as TherapyPlan;
+            setPublicReportPlan(planData);
           } else {
-            setPublicReportError('Report not found or has been deleted. / রিপোর্টটি পাওয়া যায়নি বা মুছে ফেলা হয়েছে।');
+            setPublicReportError('Report not found or has been deleted from database. / রিপোর্টটি ডাটাবেস থেকে মুছে ফেলা হয়েছে বা পাওয়া যায়নি।');
           }
-        } catch (err: any) {
-          console.error("Public report fetch failed with Firestore error:", err);
-          const rawErrorMsg = err.message || String(err);
+        } catch (error: any) {
+          // Catch block with requested log format
+          console.error("Firestore load error", error);
+          
+          const rawErrorMsg = error.message || String(error);
           let parsedError = rawErrorMsg;
           try {
             const parsed = JSON.parse(rawErrorMsg);
@@ -555,9 +579,11 @@ export default function App() {
               parsedError = parsed.error;
             }
           } catch (e) {
-            // Error is not a JSON string, use raw message
+            // Not a JSON string, keep raw message
           }
-          setPublicReportError(`Failed to load clinical report from server: ${parsedError} / সার্ভার থেকে রিপোর্ট লোড করা সম্ভব হয়নি: ${parsedError}`);
+          
+          // Display actual Firestore error message on screen
+          setPublicReportError(`Failed to load clinical report from server. Firestore Error: ${parsedError} / সার্ভার থেকে রিপোর্ট লোড করা সম্ভব হয়নি। ফায়ারস্টোর ত্রুটি: ${parsedError}`);
         } finally {
           setPublicReportLoading(false);
         }
@@ -631,16 +657,16 @@ export default function App() {
               accessToken: cloudSettings.accessToken || 'EAAaIJ8yMa4sBRkR9hGWgaQPBZBxKqWbUzGOYcHDNc2eNTYee5KDUNlSMegxggjhqNYesll1ZBnxZBGkd8xPftzZAT68VIy8iibMMoD5zXkrJN1j0ZCXNH7QXxO7CZCqkr2QzayVKnki5lUu687dByehoeJIVn9rZCmfH493NKa6hvHBnVjKbhKrVnKhiPCAtaqgkwZDZD',
               phoneNumberId: cloudSettings.phoneNumberId || '1183533281504386',
               businessAccountId: cloudSettings.businessAccountId || '1323055779302168',
-              templateName: cloudSettings.templateName || 'hello_world',
-              langCode: cloudSettings.langCode || 'en_US',
+              templateName: cloudSettings.templateName || 'speech_report_ready',
+              langCode: cloudSettings.langCode || 'en',
               sendMethod: cloudSettings.sendMethod || 'link'
             };
             setWhatsappSettings(merged);
             safeLocalStorage.setItem('slp_wa_access_token', merged.accessToken);
             safeLocalStorage.setItem('slp_wa_phone_number_id', merged.phoneNumberId);
             safeLocalStorage.setItem('slp_wa_business_account_id', merged.businessAccountId);
-            safeLocalStorage.setItem('slp_wa_template_name', merged.templateName || 'hello_world');
-            safeLocalStorage.setItem('slp_wa_lang_code', merged.langCode || 'en_US');
+            safeLocalStorage.setItem('slp_wa_template_name', merged.templateName || 'speech_report_ready');
+            safeLocalStorage.setItem('slp_wa_lang_code', merged.langCode || 'en');
             safeLocalStorage.setItem('slp_wa_send_method', merged.sendMethod || 'link');
           }
         } catch (err) {
@@ -656,8 +682,9 @@ export default function App() {
     safeLocalStorage.setItem('slp_wa_access_token', settings.accessToken);
     safeLocalStorage.setItem('slp_wa_phone_number_id', settings.phoneNumberId);
     safeLocalStorage.setItem('slp_wa_business_account_id', settings.businessAccountId);
-    safeLocalStorage.setItem('slp_wa_template_name', settings.templateName || 'hello_world');
-    safeLocalStorage.setItem('slp_wa_lang_code', settings.langCode || 'en_US');
+    safeLocalStorage.setItem('slp_wa_template_name', settings.templateName || 'speech_report_ready');
+    safeLocalStorage.setItem('slp_wa_utility_template_name', settings.utilityTemplateName || 'speech_report_ready');
+    safeLocalStorage.setItem('slp_wa_lang_code', settings.langCode || 'en');
     safeLocalStorage.setItem('slp_wa_send_method', settings.sendMethod || 'link');
 
     if (user) {
@@ -1103,6 +1130,17 @@ export default function App() {
           }
         };
 
+        // Log recipient and message body before popup
+        console.log("Recipient:", sanitizedPhone);
+        console.log("Message Text:", textPayload.text.body);
+
+        // Display the final message text in a popup before sending
+        const confirmed = await confirmWhatsAppMessage(sanitizedPhone, textPayload.text.body);
+        if (!confirmed) {
+          setIsSendingWhatsApp(null);
+          return;
+        }
+
         console.log("WHATSAPP DIAGNOSTIC: Sending text payload:", JSON.stringify(textPayload));
 
         const sendRes = await fetch(`https://graph.facebook.com/v20.0/${whatsappSettings.phoneNumberId}/messages`, {
@@ -1129,6 +1167,14 @@ export default function App() {
         if (!messageId) {
           throw new Error("Diagnostic send failed: No message ID returned in Meta response.");
         }
+
+        // Detailed logging after WhatsApp send
+        console.log("WhatsApp Send Detailed Log:");
+        console.log("- Recipient phone number:", sanitizedPhone);
+        console.log("- Exact payload sent to Meta:", JSON.stringify(textPayload, null, 2));
+        console.log("- Meta response:", JSON.stringify(sendResult, null, 2));
+        console.log("- Returned wamid:", messageId);
+        console.log("- Generated WhatsApp message text:", textPayload.text.body);
 
         setNotification({
           message: `Diagnostic text message successfully sent to "${plan.patientName}" on WhatsApp! (Message ID: ${messageId}). Credentials and phone formatting are correct!`,
@@ -1161,101 +1207,191 @@ export default function App() {
 
         const reportLink = `${window.location.origin}/report?id=${plan.id}`;
         console.log("Generated URL:", reportLink);
+        const reportUrl = reportLink;
 
-        setNotification({
-          message: `Delivering secure report link to "${plan.patientName}" on WhatsApp...`,
-          type: 'info'
-        });
+        // Check if conversation window is active based on database field
+        const isCurrentlyActive = !!(plan.lastPatientReplyAt && (Date.now() - new Date(plan.lastPatientReplyAt).getTime()) <= 24 * 60 * 60 * 1000);
+        console.log("Checking if active 24-hour conversation window exists...");
+        console.log("Detected active window state (from DB):", isCurrentlyActive);
 
-        const linkPayload = {
+        // Prepare initial template payload
+        const initialTemplatePayload = {
           messaging_product: "whatsapp",
-          recipient_type: "individual",
           to: sanitizedPhone,
-          type: "text",
-          text: {
-            preview_url: true,
-            body: `*Bengal Rehabilitation Group (BRG)*\n\nDear Parent/Patient,\nClinical Speech Assessment Report and Therapy Plan for *${plan.patientName}* is ready. You can view, print, and download the official report here:\n\n👉 ${reportLink}\n\nThank you for choosing BRG Speak HUB!`
+          type: "template",
+          template: {
+            name: "speech_report_ready",
+            language: {
+              code: "en"
+            },
+            components: [
+              {
+                type: "body",
+                parameters: [
+                  {
+                    type: "text",
+                    text: reportUrl
+                  }
+                ]
+              }
+            ]
           }
         };
 
-        console.log("WHATSAPP LINK: Sending text link payload:", JSON.stringify(linkPayload));
+        // Prepare text-only report link message body
+        const textMessageBody = `*Bengal Rehabilitation Group (BRG)*\n\nDear Parent/Patient,\nClinical Speech Assessment Report and Therapy Plan for *${plan.patientName}* has been successfully generated.\n\n👉 Report Link: ${reportUrl}\n\nDownload Instruction: Please open the link on your phone or web browser, review the session goals, and use the 'Download PDF' or 'Print' button at the bottom of the page to save a copy of this official clinical record.`;
 
-        const sendRes = await fetch(`https://graph.facebook.com/v20.0/${whatsappSettings.phoneNumberId}/messages`, {
+        // Prepare utility template payload
+        const utilityTemplatePayload = {
+          messaging_product: "whatsapp",
+          to: sanitizedPhone,
+          type: "template",
+          template: {
+            name: "speech_report_ready",
+            language: {
+              code: "en"
+            },
+            components: [
+              {
+                type: "body",
+                parameters: [
+                  {
+                    type: "text",
+                    text: reportUrl
+                  }
+                ]
+              }
+            ]
+          }
+        };
+
+        const confirmationMessage = `We are about to trigger the automated delivery flow to +${sanitizedPhone}:
+
+[STEP 1] Send Initial Approved Template
+• Template Name: "speech_report_ready"
+• Language: "en"
+• Parameter 1 (Report URL): ${reportUrl}
+
+[STEP 2] Send Report Link (Detected 24h Window: ${isCurrentlyActive ? 'ACTIVE ✅' : 'INACTIVE ❌'})
+${isCurrentlyActive 
+  ? `• Format: Normal free-form Text Message\n• Content:\n${textMessageBody}` 
+  : `• Format: Approved Utility Template ("speech_report_ready")\n• Parameter 1 (Report URL): ${reportUrl}`
+}`;
+
+        // Prompt user with full workflow details before executing
+        const confirmed = await confirmWhatsAppMessage(sanitizedPhone, confirmationMessage);
+        if (!confirmed) {
+          setNotification({
+            message: `WhatsApp delivery flow was cancelled by user.`,
+            type: 'info'
+          });
+          return;
+        }
+
+        // --- STEP 1: Send Approved Initial Template ---
+        setNotification({
+          message: `Sending initial approved template...`,
+          type: 'info'
+        });
+
+        console.log("SENDING INITIAL APPROVED TEMPLATE");
+        console.log("PAYLOAD:", JSON.stringify(initialTemplatePayload, null, 2));
+
+        const templateRes = await fetch(`https://graph.facebook.com/v20.0/${whatsappSettings.phoneNumberId}/messages`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${whatsappSettings.accessToken}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify(linkPayload)
+          body: JSON.stringify(initialTemplatePayload)
         });
 
-        const sendStatus = sendRes.status;
-        const sendResult = await sendRes.json();
-        console.log(`WHATSAPP LINK SEND RESPONSE [Status: ${sendStatus}]:`, JSON.stringify(sendResult, null, 2));
+        const templateStatus = templateRes.status;
+        const templateRawResponse = await templateRes.text();
+        console.log("INITIAL TEMPLATE STATUS:", templateStatus);
+        console.log("INITIAL TEMPLATE RAW RESPONSE:", templateRawResponse);
 
-        if (!sendRes.ok) {
-          const code = sendResult.error?.code;
-          const msg = sendResult.error?.message || '';
-          
-          if (msg.toLowerCase().includes('authentication') || code === 190) {
-            throw new Error(`Authentication Error / অথেন্টিকেশন ত্রুটি:
-👉 Solution / সমাধান:
-আপনার Meta Access Token এবং Phone Number ID একে অপরের সাথে মেলেনি অথবা টোকেনের মেয়াদ শেষ হয়ে গেছে।`);
-          }
-          
-          // Fallback to approved template
-          if (code === 131030 || msg.toLowerCase().includes('window')) {
-            setNotification({
-              message: 'Active conversation window not open. Dispatching template fallback notification...',
-              type: 'info'
-            });
+        let initialResponseData: any = {};
+        try {
+          initialResponseData = JSON.parse(templateRawResponse);
+        } catch (e) {}
 
-            const templatePayload = {
-              messaging_product: "whatsapp",
-              to: sanitizedPhone,
-              type: "template",
-              template: {
-                name: whatsappSettings.templateName || "hello_world",
-                language: {
-                  code: whatsappSettings.langCode || "en_US"
-                }
-              }
-            };
+        console.log("Using template:", "speech_report_ready");
+        console.log("Report URL:", reportUrl);
+        console.log("Meta template response:", initialResponseData);
 
-            const fallbackRes = await fetch(`https://graph.facebook.com/v20.0/${whatsappSettings.phoneNumberId}/messages`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${whatsappSettings.accessToken}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify(templatePayload)
-            });
-
-            const fallbackResult = await fallbackRes.json();
-            if (!fallbackRes.ok) {
-              const fallbackMsg = fallbackResult.error?.message || '';
-              throw new Error(`Failed to send WhatsApp template fallback. Meta API replied: ${fallbackMsg}`);
-            }
-
-            setNotification({
-              message: `Template notification dispatched to "${plan.patientName}" perfectly! Please send a message back from the patient's phone to open the active 24h window for the direct report link.`,
-              type: 'success'
-            });
-            return;
-          }
-
-          throw new Error(`Meta API Error [Code ${code}]: ${msg}`);
+        if (!templateRes.ok) {
+          throw new Error(`Failed to deliver initial approved template. Meta API Error: ${templateRawResponse}`);
         }
 
-        const messageId = sendResult.messages?.[0]?.id;
+        console.log("Template sent successfully");
+
+        // --- STEP 2: Send Report Link ---
+        console.log("Sending report link message");
+        console.log("Report URL:", reportUrl);
+
+        const secondPayload = isCurrentlyActive ? {
+          messaging_product: "whatsapp",
+          to: sanitizedPhone,
+          type: "text",
+          text: {
+            body: textMessageBody
+          }
+        } : utilityTemplatePayload;
+
+        console.log("SECOND MESSAGE PAYLOAD");
+        console.log(JSON.stringify(secondPayload, null, 2));
+
         setNotification({
-          message: `Clinical Report Web Link successfully sent to "${plan.patientName}" on WhatsApp! (Message ID: ${messageId})`,
+          message: `Initial template sent! Delivering report link...`,
+          type: 'info'
+        });
+
+        const secondRes = await fetch(`https://graph.facebook.com/v20.0/${whatsappSettings.phoneNumberId}/messages`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${whatsappSettings.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(secondPayload)
+        });
+
+        const secondStatus = secondRes.status;
+        const secondRawText = await secondRes.text();
+        console.log("HTTP STATUS:", secondStatus);
+        console.log("HTTP OK:", secondRes.ok);
+        console.log("RAW META RESPONSE:", secondRawText);
+
+        let responseData: any = {};
+        try {
+          responseData = JSON.parse(secondRawText);
+        } catch (e) {}
+
+        console.log("Meta response:", responseData);
+        if (!isCurrentlyActive) {
+          console.log("Using template:", "speech_report_ready");
+          console.log("Report URL:", reportUrl);
+          console.log("Meta template response:", responseData);
+        }
+
+        if (!secondRes.ok) {
+          console.error("Second message delivery failed. Complete Meta error response:", secondRawText);
+          throw new Error(secondRawText);
+        }
+
+        console.log("REPORT MESSAGE ACCEPTED BY META");
+        console.log("FUNCTION REACHED END OF REPORT SEND");
+
+        const wamid = responseData.messages?.[0]?.id;
+
+        setNotification({
+          message: `Template and report link successfully delivered to "${plan.patientName}" on WhatsApp! (wamid: ${wamid})`,
           type: 'success'
         });
       } catch (err: any) {
-        console.error("WHATSAPP LINK EXCEPTION:", err);
+        console.error("WHATSAPP FLOW EXCEPTION:", err);
         setNotification({
-          message: `WhatsApp link send failed: ${err.message || 'Meta API error'}`,
+          message: `WhatsApp flow failed: ${err.message || 'Meta API error'}`,
           type: 'error'
         });
       } finally {
@@ -1390,6 +1526,19 @@ export default function App() {
         }
       };
 
+      const documentCaption = `Hello, here is your Speech-Language Pathology Clinical Report formulated on ${plan.date}.`;
+
+      // Log recipient and message body before popup
+      console.log("Recipient:", sanitizedPhone);
+      console.log("Message Text:", documentCaption);
+
+      // Display the final message text in a popup before sending
+      const confirmed = await confirmWhatsAppMessage(sanitizedPhone, `[Document File: ${fileName}]\n\nCaption:\n${documentCaption}`);
+      if (!confirmed) {
+        setIsSendingWhatsApp(null);
+        return;
+      }
+
       const sendRes = await fetch(`https://graph.facebook.com/v20.0/${whatsappSettings.phoneNumberId}/messages`, {
         method: 'POST',
         headers: {
@@ -1442,15 +1591,27 @@ export default function App() {
             type: 'info'
           });
 
+          const reportUrl = `${window.location.origin}/report?id=${plan.id}`;
           const templatePayload = {
             messaging_product: "whatsapp",
             to: sanitizedPhone,
             type: "template",
             template: {
-              name: whatsappSettings.templateName || "hello_world",
+              name: "speech_report_ready",
               language: {
-                code: whatsappSettings.langCode || "en_US"
-              }
+                code: "en"
+              },
+              components: [
+                {
+                  type: "body",
+                  parameters: [
+                    {
+                      type: "text",
+                      text: reportUrl
+                    }
+                  ]
+                }
+              ]
             }
           };
 
@@ -1466,6 +1627,10 @@ export default function App() {
           const fallbackStatus = fallbackRes.status;
           const fallbackResult = await fallbackRes.json();
           console.log(`WHATSAPP FALLBACK MESSAGE RESPONSE [Status: ${fallbackStatus}]:`, JSON.stringify(fallbackResult, null, 2));
+
+          console.log("Using template:", "speech_report_ready");
+          console.log("Report URL:", reportUrl);
+          console.log("Meta template response:", fallbackResult);
 
           if (!fallbackRes.ok) {
             const fallbackMsg = fallbackResult.error?.message || '';
@@ -1487,6 +1652,14 @@ export default function App() {
             throw new Error("Meta fallback API responded with success status but did not return a valid WhatsApp Message ID.");
           }
 
+          // Detailed logging after WhatsApp template fallback send
+          console.log("WhatsApp Send Detailed Log (Template Fallback):");
+          console.log("- Recipient phone number:", sanitizedPhone);
+          console.log("- Exact payload sent to Meta:", JSON.stringify(templatePayload, null, 2));
+          console.log("- Meta response:", JSON.stringify(fallbackResult, null, 2));
+          console.log("- Returned wamid:", fallbackMsgId);
+          console.log("- Generated WhatsApp message text:", `[Template: speech_report_ready]`);
+
           setNotification({
             message: `Template notification dispatched to "${plan.patientName}" on WhatsApp perfectly! (Message ID: ${fallbackMsgId}). (Could not attach document as no active 24-hour chat window exists yet)`,
             type: 'success'
@@ -1499,6 +1672,15 @@ export default function App() {
         if (!messageId) {
           throw new Error("Meta API responded with success status but did not return a valid WhatsApp Message ID.");
         }
+
+        // Detailed logging after WhatsApp send
+        console.log("WhatsApp Send Detailed Log:");
+        console.log("- Recipient phone number:", sanitizedPhone);
+        console.log("- Exact payload sent to Meta:", JSON.stringify(messagePayload, null, 2));
+        console.log("- Meta response:", JSON.stringify(sendResult, null, 2));
+        console.log("- Returned wamid:", messageId);
+        console.log("- Generated WhatsApp message text:", documentCaption);
+
         setNotification({
           message: `Direct PDF report successfully delivered to "${plan.patientName}" on WhatsApp! (Message ID: ${messageId})`,
           type: 'success'
@@ -3296,6 +3478,50 @@ export default function App() {
                       <Copy size={11} />
                       <span>Copy Link</span>
                     </button>
+
+                    {currentPlan && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const now = new Date().toISOString();
+                          const isCurrentlyActive = currentPlan.lastPatientReplyAt && (Date.now() - new Date(currentPlan.lastPatientReplyAt).getTime()) <= 24 * 60 * 60 * 1000;
+                          const newReplyTime = isCurrentlyActive ? "" : now;
+                          const updated = { ...currentPlan, lastPatientReplyAt: newReplyTime };
+                          setCurrentPlan(updated);
+                          if (user) {
+                            try {
+                              await saveTherapyPlan(updated, false);
+                            } catch (e) {
+                              console.error("Failed to sync updated reply state online:", e);
+                            }
+                          }
+                          setNotification({
+                            message: isCurrentlyActive 
+                              ? 'Active conversation window reset!' 
+                              : 'Patient WhatsApp reply registered! 24-hour delivery window active.',
+                            type: 'success'
+                          });
+                        }}
+                        className={`py-1 px-2 border rounded-md font-bold text-[10px] cursor-pointer transition-all flex items-center gap-1.5 shrink-0 ${
+                          currentPlan.lastPatientReplyAt && (Date.now() - new Date(currentPlan.lastPatientReplyAt).getTime()) <= 24 * 60 * 60 * 1000
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                            : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'
+                        }`}
+                        title={
+                          currentPlan.lastPatientReplyAt && (Date.now() - new Date(currentPlan.lastPatientReplyAt).getTime()) <= 24 * 60 * 60 * 1000
+                            ? `Active 24h window (Replied at: ${new Date(currentPlan.lastPatientReplyAt).toLocaleTimeString()})`
+                            : 'No active 24h window. Click if patient replied to you.'
+                        }
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          currentPlan.lastPatientReplyAt && (Date.now() - new Date(currentPlan.lastPatientReplyAt).getTime()) <= 24 * 60 * 60 * 1000
+                            ? 'bg-emerald-500 animate-pulse'
+                            : 'bg-slate-400'
+                        }`} />
+                        <span>{currentPlan.lastPatientReplyAt && (Date.now() - new Date(currentPlan.lastPatientReplyAt).getTime()) <= 24 * 60 * 60 * 1000 ? '24h Window: Active' : '24h Window: Inactive'}</span>
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={triggerWhatsAppDirect}
@@ -3562,8 +3788,9 @@ export default function App() {
                     accessToken: (formData.get('accessToken') as string || '').trim(),
                     phoneNumberId: (formData.get('phoneNumberId') as string || '').trim(),
                     businessAccountId: (formData.get('businessAccountId') as string || '').trim(),
-                    templateName: (formData.get('templateName') as string || '').trim() || 'hello_world',
-                    langCode: (formData.get('langCode') as string || '').trim() || 'en_US',
+                    templateName: (formData.get('templateName') as string || '').trim() || 'speech_report_ready',
+                    utilityTemplateName: (formData.get('utilityTemplateName') as string || '').trim() || 'speech_report_ready',
+                    langCode: (formData.get('langCode') as string || '').trim() || 'en',
                     sendMethod: formData.get('sendMethod') as 'pdf' | 'link'
                   });
                 }}
@@ -3623,35 +3850,47 @@ export default function App() {
                 </div>
 
                 <div className="border-t border-slate-150 pt-3.5 mt-3.5 space-y-3">
-                  <h5 className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Fallback Notification Settings</h5>
+                  <h5 className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Fallback & Template Settings</h5>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                        Template Name
+                        Initial Template Name (1st Msg)
                       </label>
                       <input
                         type="text"
                         name="templateName"
                         defaultValue={whatsappSettings.templateName}
                         className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-emerald-500 focus:bg-white transition"
-                        placeholder="hello_world"
+                        placeholder="speech_report_ready"
                       />
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                        Language Code
+                        Utility Template Name (2nd Msg)
                       </label>
                       <input
                         type="text"
-                        name="langCode"
-                        defaultValue={whatsappSettings.langCode}
+                        name="utilityTemplateName"
+                        defaultValue={whatsappSettings.utilityTemplateName || 'speech_report_ready'}
                         className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-emerald-500 focus:bg-white transition"
-                        placeholder="en_US"
+                        placeholder="speech_report_ready"
                       />
                     </div>
                   </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                      Language Code
+                    </label>
+                    <input
+                      type="text"
+                      name="langCode"
+                      defaultValue={whatsappSettings.langCode}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-emerald-500 focus:bg-white transition"
+                      placeholder="en"
+                    />
+                  </div>
                   <p className="text-[9px] text-slate-400 mt-1 leading-[1.3]">
-                    Template name and languages are triggered as fallback automatically if the active 24h window constraint is hit. Default template approved by Meta is <strong>hello_world</strong>.
+                    The initial template is triggered first to open a business conversation. If the patient has replied within the last 24 hours, the link is sent as a free-form message. Otherwise, it is sent via the custom Utility Template with parameters.
                   </p>
                 </div>
 
@@ -3823,6 +4062,74 @@ export default function App() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* WHATSAPP MESSAGE PRE-SEND VERIFICATION POPUP */}
+      <AnimatePresence>
+        {whatsAppConfirmData && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.15 }}
+              className="bg-white rounded-2xl border border-slate-100 shadow-2xl max-w-lg w-full overflow-hidden flex flex-col"
+            >
+              <div className="bg-emerald-50 border-b border-emerald-100 px-6 py-4 flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700">
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-[14px]">Verify WhatsApp Dispatch</h3>
+                  <p className="text-[11px] text-slate-500">Review recipient and payload message body below</p>
+                </div>
+              </div>
+
+              <div className="p-6 space-y-4 overflow-y-auto max-h-[450px]">
+                <div className="space-y-1">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Recipient Phone Number</span>
+                  <div className="bg-slate-50 rounded-lg px-3 py-2 border border-slate-100 flex items-center gap-2">
+                    <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span className="font-mono text-xs font-bold text-slate-700">+{whatsAppConfirmData.recipient}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Generated Message Body Text</span>
+                  <div className="bg-slate-950 rounded-xl p-4 border border-slate-800 max-h-[250px] overflow-y-auto shadow-inner text-emerald-400 font-mono text-[11px] leading-relaxed whitespace-pre-wrap selection:bg-emerald-900 selection:text-white">
+                    {whatsAppConfirmData.messageText}
+                  </div>
+                </div>
+
+                <p className="text-[10.5px] text-slate-500 leading-relaxed bg-amber-50 border border-amber-100 rounded-lg p-2.5 text-amber-800">
+                  ⚠️ <strong>Disclaimer:</strong> Please verify the phone number is correct and includes country code. Once confirmed, this payload will be processed via Meta Cloud API endpoints immediately.
+                </p>
+              </div>
+
+              <div className="bg-slate-50 px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={whatsAppConfirmData.onCancel}
+                  className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                >
+                  Cancel Send
+                </button>
+                <button
+                  type="button"
+                  onClick={whatsAppConfirmData.onConfirm}
+                  className="px-5 py-2 text-xs font-extrabold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition shadow-md shadow-emerald-100 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                  </svg>
+                  Confirm & Send
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

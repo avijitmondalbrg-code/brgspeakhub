@@ -3,6 +3,7 @@ export interface TherapyPlan {
   ownerId: string;
   patientName: string;
   patientPhone?: string;
+  lastPatientReplyAt?: string; // ISO string representing when the patient last messaged
   age: string;
   gender: string;
   date: string; // formulation date (YYYY-MM-DD)
@@ -27,6 +28,7 @@ export interface WhatsAppSettings {
   phoneNumberId: string;
   businessAccountId: string;
   templateName?: string;
+  utilityTemplateName?: string;
   langCode?: string;
   sendMethod?: 'pdf' | 'link';
 }
