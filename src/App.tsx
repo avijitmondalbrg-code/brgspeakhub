@@ -411,9 +411,16 @@ export default function App() {
   });
 
   // Public single-report sharing view states
-  const [publicReportId, setPublicReportId] = useState<string | null>(null);
+  const [publicReportId, setPublicReportId] = useState<string | null>(() => {
+    const reportId = new URLSearchParams(window.location.search).get("id");
+    console.log("Report ID:", reportId);
+    return reportId;
+  });
   const [publicReportPlan, setPublicReportPlan] = useState<TherapyPlan | null>(null);
-  const [publicReportLoading, setPublicReportLoading] = useState(false);
+  const [publicReportLoading, setPublicReportLoading] = useState(() => {
+    const reportId = new URLSearchParams(window.location.search).get("id");
+    return !!reportId;
+  });
   const [publicReportError, setPublicReportError] = useState<string | null>(null);
   
   // WhatsApp pre-send confirmation popup state
@@ -518,18 +525,17 @@ export default function App() {
 
   // Check URL parameters for public shared report link
   useEffect(() => {
-    // Log exactly requested debug information
+    // Read the report id
+    const reportId = new URLSearchParams(window.location.search).get("id");
+    console.log("Report ID:", reportId);
+
+    // Log other debug information
     console.log("Full URL:", window.location.href);
     console.log("Search:", window.location.search);
 
     const params = new URLSearchParams(window.location.search);
     console.log("All params:", Object.fromEntries(params.entries()));
 
-    // Verify which parameter name is expected: 'id'
-    const reportId = params.get("id");
-    console.log("Extracted report ID:", reportId);
-
-    // Backward compatibility or warning helper
     const fullUrl = window.location.href;
     const queryString = window.location.search;
 
@@ -565,7 +571,7 @@ export default function App() {
             const planData = { id: docSnap.id, ...docSnap.data() } as TherapyPlan;
             setPublicReportPlan(planData);
           } else {
-            setPublicReportError('Report not found or has been deleted from database. / রিপোর্টটি ডাটাবেস থেকে মুছে ফেলা হয়েছে বা পাওয়া যায়নি।');
+            setPublicReportError('Report Not Found / রিপোর্টটি খুঁজে পাওয়া যায়নি বা মুছে ফেলা হয়েছে।');
           }
         } catch (error: any) {
           // Catch block with requested log format
@@ -1075,6 +1081,10 @@ export default function App() {
 
   // WhatsApp automatic sender and delivery pipeline
   const sendPDFToWhatsApp = async (plan: TherapyPlan) => {
+    if (isSendingWhatsApp === plan.id) {
+      console.log("Already sending WhatsApp for this plan, ignoring duplicate trigger.");
+      return;
+    }
     setIsSendingWhatsApp(plan.id);
 
     // 1. Validate and sanitize recipient phone number
@@ -1205,8 +1215,8 @@ export default function App() {
           throw new Error(`The report with ID ${plan.id} does not exist in the Firestore database. Please save/sync it first. / রিপোর্টটি ফায়ারস্টোর ডাটাবেসে পাওয়া যায়নি। অনুগ্রহ করে প্রথমে এটি সেভ বা সিঙ্ক করুন।`);
         }
 
-        const reportLink = `${window.location.origin}/report?id=${plan.id}`;
-        console.log("Generated URL:", reportLink);
+        const reportLink = `https://brgspeakhub.vercel.app/report?id=${plan.id}`;
+        console.log("Production Report URL:", reportLink);
         const reportUrl = reportLink;
 
         // Check if conversation window is active based on database field
@@ -1325,6 +1335,19 @@ ${isCurrentlyActive
         }
 
         console.log("Template sent successfully");
+
+        // If the 24-hour window is inactive, the template we just sent already contains the report URL.
+        // There is no need to send the exact same template again as Step 2.
+        if (!isCurrentlyActive) {
+          console.log("24-hour window is inactive. Report link has been successfully delivered in the first template. Skipping second send to avoid duplication.");
+          const wamid = initialResponseData.messages?.[0]?.id || "";
+          setNotification({
+            message: `Template and report link successfully delivered to "${plan.patientName}" on WhatsApp! (wamid: ${wamid})`,
+            type: 'success'
+          });
+          setIsSendingWhatsApp(null);
+          return;
+        }
 
         // --- STEP 2: Send Report Link ---
         console.log("Sending report link message");
@@ -1591,7 +1614,8 @@ ${isCurrentlyActive
             type: 'info'
           });
 
-          const reportUrl = `${window.location.origin}/report?id=${plan.id}`;
+          const reportUrl = `https://brgspeakhub.vercel.app/report?id=${plan.id}`;
+          console.log("Production Report URL:", reportUrl);
           const templatePayload = {
             messaging_product: "whatsapp",
             to: sanitizedPhone,
@@ -1726,6 +1750,10 @@ ${isCurrentlyActive
 
   const triggerWhatsAppDirect = async () => {
     if (!currentPlan) return;
+    if (isSendingWhatsApp) {
+      console.log("Already in a sending state, ignoring direct trigger.");
+      return;
+    }
     if (!whatsappSettings.accessToken) {
       setShowWhatsAppModal(true);
       setNotification({
@@ -2088,8 +2116,8 @@ ${isCurrentlyActive
   // Copy shareable public report web link
   const copyShareLink = (planId: string) => {
     if (!planId) return;
-    const reportLink = `${window.location.origin}/report?id=${planId}`;
-    console.log("Generated URL:", reportLink);
+    const reportLink = `https://brgspeakhub.vercel.app/report?id=${planId}`;
+    console.log("Production Report URL:", reportLink);
     navigator.clipboard.writeText(reportLink).then(() => {
       setNotification({
         message: 'Shareable report link copied to clipboard! / রিপোর্ট লিংক ক্লিপবোর্ডে কপি হয়েছে!',
@@ -2122,7 +2150,8 @@ ${isCurrentlyActive
   })();
 
   // Public patient shared report portal intercept
-  if (publicReportId) {
+  const isReportPath = window.location.pathname === "/report" || window.location.pathname.startsWith("/report/");
+  if (publicReportId || isReportPath) {
     if (publicReportLoading) {
       return (
         <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white font-sans" id="public-portal-loading">
