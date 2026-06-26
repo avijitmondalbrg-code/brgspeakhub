@@ -2,7 +2,6 @@
   "cleanUrls": true,
   "rewrites": [
     { "source": "/report", "destination": "/index.html" },
-    { "source": "/report/(.*)", "destination": "/index.html" },
-    { "source": "/((?!api|assets|.*\\.).*)", "destination": "/index.html" }
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
