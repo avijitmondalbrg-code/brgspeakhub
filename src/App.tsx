@@ -511,6 +511,18 @@ export default function App() {
 
   // Authenticate monitor
   useEffect(() => {
+    const adminToken = localStorage.getItem('admin_token');
+    if (adminToken) {
+      setUser({
+        uid: 'admin-system-uid',
+        email: 'admin@brgspeakhub.com',
+        displayName: 'System Administrator',
+        isAnonymous: false
+      } as any);
+      setAuthLoading(false);
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         setUser(firebaseUser);
@@ -938,40 +950,47 @@ export default function App() {
 
     try {
       setAdminLoginLoading(true);
-      const email = 'admin@brgspeakhub.com';
-      const password = adminPassword;
+      
+      const response = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          username: adminUsername,
+          password: adminPassword
+        })
+      });
 
-      let userCredential;
-      try {
-        // Attempt sign in
-        userCredential = await signInWithEmailAndPassword(auth, email, password);
-      } catch (signInErr: any) {
-        // Auto-provision if account doesn't exist
-        if (
-          signInErr.code === 'auth/user-not-found' || 
-          signInErr.code === 'auth/invalid-login-credentials' ||
-          signInErr.code === 'auth/invalid-credential' ||
-          signInErr.message?.includes('user-not-found')
-        ) {
-          try {
-            userCredential = await createUserWithEmailAndPassword(auth, email, password);
-          } catch (createErr: any) {
-            throw new Error(`Admin provisioning failed: ${createErr.message}`);
-          }
-        } else {
-          throw signInErr;
-        }
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.message || "Admin validation failed.");
       }
 
-      if (userCredential && userCredential.user) {
-        setNotification({
-          message: "Signed in successfully as System Administrator! (সকল থেরাপি প্ল্যান দেখার অনুমতি সক্রিয়)",
-          type: 'success'
-        });
+      const data = await response.json();
+      if (data.success && data.token) {
+        // Save the admin token in localStorage
+        localStorage.setItem('admin_token', data.token);
+        
+        // Mock the user object
+        const adminUser = {
+          uid: data.user.uid,
+          email: data.user.email,
+          displayName: data.user.displayName,
+          isAnonymous: false
+        } as any;
+        
+        setUser(adminUser);
+        setBypassLogin(false);
         setIsLoginModalOpen(false);
         setAdminUsername('');
         setAdminPassword('');
         setShowAdminForm(false);
+
+        setNotification({
+          message: "Signed in successfully as System Administrator! (সকল থেরাপি প্ল্যান দেখার অনুমতি সক্রিয়)",
+          type: 'success'
+        });
       }
     } catch (error: any) {
       console.error("Admin sign-in error:", error);
@@ -986,6 +1005,7 @@ export default function App() {
 
   const handleLogActiveOut = async () => {
     try {
+      localStorage.removeItem('admin_token');
       await signOut(auth);
       setUser(null);
       setBypassLogin(false);
