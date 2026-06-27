@@ -89,13 +89,18 @@ export async function deleteTherapyPlan(planId: string): Promise<void> {
   }
 }
 
-export async function getTherapyPlans(ownerId: string): Promise<TherapyPlan[]> {
+export async function getTherapyPlans(ownerId: string, isAdmin = false): Promise<TherapyPlan[]> {
   try {
-    const q = query(
-      collection(db, COLLECTION_NAME),
-      where('ownerId', '==', ownerId),
-      orderBy('createdAt', 'desc')
-    );
+    const q = isAdmin 
+      ? query(
+          collection(db, COLLECTION_NAME),
+          orderBy('createdAt', 'desc')
+        )
+      : query(
+          collection(db, COLLECTION_NAME),
+          where('ownerId', '==', ownerId),
+          orderBy('createdAt', 'desc')
+        );
     const querySnapshot = await getDocs(q);
     const plans: TherapyPlan[] = [];
     querySnapshot.forEach((doc) => {
@@ -105,10 +110,12 @@ export async function getTherapyPlans(ownerId: string): Promise<TherapyPlan[]> {
   } catch (error) {
     // If we get an index error or similar, fallback to client-side sorting to ensure the app works smoothly
     try {
-      const qFallback = query(
-        collection(db, COLLECTION_NAME),
-        where('ownerId', '==', ownerId)
-      );
+      const qFallback = isAdmin
+        ? query(collection(db, COLLECTION_NAME))
+        : query(
+            collection(db, COLLECTION_NAME),
+            where('ownerId', '==', ownerId)
+          );
       const querySnapshot = await getDocs(qFallback);
       const plans: TherapyPlan[] = [];
       querySnapshot.forEach((doc) => {

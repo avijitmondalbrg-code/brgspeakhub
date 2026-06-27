@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { auth, googleProvider, signInWithPopup, db } from './firebase';
-import { onAuthStateChanged, signOut, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
+import { onAuthStateChanged, signOut, signInAnonymously, User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { TherapyPlan, WhatsAppSettings } from './types';
 import { saveTherapyPlan, deleteTherapyPlan, getTherapyPlans, saveWhatsAppSettings, getWhatsAppSettings, getTherapyPlan } from './firebaseService';
@@ -305,6 +305,15 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [plans, setPlans] = useState<TherapyPlan[]>([]);
   const [loadingPlans, setLoadingPlans] = useState(false);
+
+  // Admin & unified Login modal states
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [adminUsername, setAdminUsername] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminLoginLoading, setAdminLoginLoading] = useState(false);
+  const [showAdminForm, setShowAdminForm] = useState(false);
+  const [bypassLogin, setBypassLogin] = useState(false);
+  const [loginTab, setLoginTab] = useState<'practitioner' | 'admin'>('practitioner');
 
   // Custom persistent brand logo state & file picker ref
   const [customLogo, setCustomLogo] = useState<string>(() => {
@@ -820,7 +829,7 @@ export default function App() {
     setLoadingPlans(true);
     if (user) {
       try {
-        const cloudPlans = await getTherapyPlans(user.uid);
+        const cloudPlans = await getTherapyPlans(user.uid, user.email === 'admin@brgspeakhub.com');
         setPlans(cloudPlans);
       } catch (err) {
         console.error("Cloud fetching failed, falling back to local files", err);
@@ -883,10 +892,11 @@ export default function App() {
   }, [view, autoWhatsAppOnLoad, currentPlan]);
 
   // Auth logins
-  const handleLogIn = async () => {
+  const handleGoogleSignIn = async () => {
     try {
       setAuthLoading(true);
       await signInWithPopup(auth, googleProvider);
+      setIsLoginModalOpen(false);
     } catch (error: any) {
       setNotification({
         message: `Sign in error: ${error.message || 'Verification cancelled'}`,
@@ -896,12 +906,91 @@ export default function App() {
     }
   };
 
+  const openLoginModal = () => {
+    setIsLoginModalOpen(true);
+  };
+
+  const handleAdminLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminUsername || !adminPassword) {
+      setNotification({
+        message: "Please enter both Admin ID and password.",
+        type: 'error'
+      });
+      return;
+    }
+
+    if (adminUsername.trim().toLowerCase() !== 'admin') {
+      setNotification({
+        message: "Invalid admin username. Use 'admin'.",
+        type: 'error'
+      });
+      return;
+    }
+
+    if (adminPassword !== '9830447176') {
+      setNotification({
+        message: "Incorrect password for administrator access.",
+        type: 'error'
+      });
+      return;
+    }
+
+    try {
+      setAdminLoginLoading(true);
+      const email = 'admin@brgspeakhub.com';
+      const password = adminPassword;
+
+      let userCredential;
+      try {
+        // Attempt sign in
+        userCredential = await signInWithEmailAndPassword(auth, email, password);
+      } catch (signInErr: any) {
+        // Auto-provision if account doesn't exist
+        if (
+          signInErr.code === 'auth/user-not-found' || 
+          signInErr.code === 'auth/invalid-login-credentials' ||
+          signInErr.code === 'auth/invalid-credential' ||
+          signInErr.message?.includes('user-not-found')
+        ) {
+          try {
+            userCredential = await createUserWithEmailAndPassword(auth, email, password);
+          } catch (createErr: any) {
+            throw new Error(`Admin provisioning failed: ${createErr.message}`);
+          }
+        } else {
+          throw signInErr;
+        }
+      }
+
+      if (userCredential && userCredential.user) {
+        setNotification({
+          message: "Signed in successfully as System Administrator! (সকল থেরাপি প্ল্যান দেখার অনুমতি সক্রিয়)",
+          type: 'success'
+        });
+        setIsLoginModalOpen(false);
+        setAdminUsername('');
+        setAdminPassword('');
+        setShowAdminForm(false);
+      }
+    } catch (error: any) {
+      console.error("Admin sign-in error:", error);
+      setNotification({
+        message: `Admin Sign-in Error: ${error.message || 'Unknown error'}`,
+        type: 'error'
+      });
+    } finally {
+      setAdminLoginLoading(false);
+    }
+  };
+
   const handleLogActiveOut = async () => {
     try {
       await signOut(auth);
       setUser(null);
+      setBypassLogin(false);
       setNotification({
-        message: "Signed out securely. Switched to local offline mode.",
+        message: "Signed out securely. Switched to login portal.",
         type: 'info'
       });
     } catch (error: any) {
@@ -2008,6 +2097,209 @@ ${isCurrentlyActive
     return <ReportPage />;
   }
 
+  // 1. If auth state is still loading, show a beautiful progress splash screen
+  if (authLoading) {
+    return (
+      <div className="min-h-screen w-screen flex flex-col items-center justify-center bg-slate-50 gap-4" id="brg-app-loading">
+        <div className="relative flex items-center justify-center">
+          <div className="w-16 h-16 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin"></div>
+          <div className="absolute font-black text-slate-800 text-[10px] tracking-tight uppercase">BRG</div>
+        </div>
+        <div className="text-center">
+          <p className="text-xs font-bold text-slate-600 uppercase tracking-wider">Securing Workspace...</p>
+          <p className="text-[10px] text-slate-400 font-medium">Please wait while we set up the portal</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Full-screen Portal Gate / Login Page
+  const isUserLoggedIn = user && !user.isAnonymous;
+  if (!isUserLoggedIn && !bypassLogin) {
+    return (
+      <div className="min-h-screen w-screen bg-slate-100 flex flex-col justify-center items-center p-4 relative font-sans text-slate-900 overflow-y-auto" id="brg-portal-gate">
+        
+        {/* Soft background glow accents */}
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-300/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-emerald-300/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="w-full max-w-md relative z-10">
+          {/* Brand Header */}
+          <div className="flex flex-col items-center mb-8 text-center animate-fade-in">
+            <div className="bg-slate-900 p-3.5 rounded-2xl shadow-xl mb-4 border border-slate-800/80">
+              <AppLogo className="w-14 h-14 rounded-xl" />
+            </div>
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight uppercase">
+              BRG Speak HUB
+            </h1>
+            <p className="text-[11px] text-blue-600 font-extrabold uppercase tracking-widest mt-1">
+              Bengal Rehab Group • Clinical Portal
+            </p>
+            <p className="text-xs text-slate-500 font-medium mt-1">
+              Speech-Language Pathology Treatment Plan Architect
+            </p>
+          </div>
+
+          {/* Core Login Card */}
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200/50 overflow-hidden flex flex-col w-full">
+            
+            {/* Elegant Tab Selectors */}
+            <div className="flex border-b border-slate-100 bg-slate-50/50 p-1.5 gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => setLoginTab('practitioner')}
+                className={`flex-1 py-3 px-4 rounded-xl text-xs font-bold tracking-wide transition-all cursor-pointer text-center flex items-center justify-center gap-2 ${
+                  loginTab === 'practitioner'
+                    ? 'bg-white text-blue-600 shadow-sm border border-slate-200/60 font-extrabold'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100/60 font-semibold'
+                }`}
+              >
+                <Sparkles size={14} className={loginTab === 'practitioner' ? 'text-blue-500' : 'text-slate-400'} />
+                <span>Practitioner Access</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setLoginTab('admin')}
+                className={`flex-1 py-3 px-4 rounded-xl text-xs font-bold tracking-wide transition-all cursor-pointer text-center flex items-center justify-center gap-2 ${
+                  loginTab === 'admin'
+                    ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60 font-extrabold'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100/60 font-semibold'
+                }`}
+              >
+                <LogIn size={14} className={loginTab === 'admin' ? 'text-slate-800' : 'text-slate-400'} />
+                <span>System Admin</span>
+              </button>
+            </div>
+
+            {/* Login Card Body */}
+            <div className="p-8 space-y-6">
+              
+              {loginTab === 'practitioner' ? (
+                <div className="space-y-6">
+                  {/* Explanatory Message */}
+                  <div className="text-center space-y-2">
+                    <h3 className="font-extrabold text-slate-800 text-sm">Google Workspace Sign In</h3>
+                    <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                      লগইন করতে নিচের বাটনে ক্লিক করুন। আপনি শুধুমাত্র নিজের তৈরি করা পেশেন্ট ডাটা দেখতে পাবেন।
+                    </p>
+                    <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                      Individual Secure Cloud Vault
+                    </p>
+                  </div>
+
+                  {/* Google Login Button */}
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignIn}
+                    className="w-full py-3.5 px-5 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 text-slate-700 font-bold text-xs rounded-2xl transition flex items-center justify-center gap-3.5 cursor-pointer shadow-sm active:scale-[0.98]"
+                  >
+                    <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
+                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335"/>
+                    </svg>
+                    <span>Google দিয়ে লগইন করুন / Sign In with Google</span>
+                  </button>
+                </div>
+              ) : (
+                <form 
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleAdminLoginSubmit(e);
+                  }} 
+                  className="space-y-4"
+                >
+                  <div className="text-center space-y-1 mb-2">
+                    <h3 className="font-extrabold text-slate-800 text-sm">Administrative Portal</h3>
+                    <p className="text-xs text-slate-500 font-medium">
+                      অ্যাডমিন অ্যাকাউন্ট দিয়ে প্রবেশ করে সকল প্র্যাক্টিশনারের রেকর্ড অ্যাক্সেস করুন।
+                    </p>
+                  </div>
+
+                  {/* Admin User ID */}
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Admin ID</label>
+                    <div className="relative">
+                      <User className="absolute left-3.5 top-3.5 text-slate-400" size={14} />
+                      <input
+                        type="text"
+                        required
+                        placeholder="Enter admin username"
+                        value={adminUsername}
+                        onChange={(e) => setAdminUsername(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200/80 py-2.5 pl-10 pr-4 text-xs rounded-xl focus:border-blue-500 focus:bg-white focus:outline-hidden transition text-slate-800 font-semibold"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Admin Password */}
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Password</label>
+                    <div className="relative">
+                      <span className="absolute left-3.5 top-3 text-slate-400 font-bold text-xs">••</span>
+                      <input
+                        type="password"
+                        required
+                        placeholder="••••••••"
+                        value={adminPassword}
+                        onChange={(e) => setAdminPassword(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200/80 py-2.5 pl-10 pr-4 text-xs rounded-xl focus:border-blue-500 focus:bg-white focus:outline-hidden transition text-slate-800"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Login Button */}
+                  <div className="pt-3">
+                    <button
+                      type="submit"
+                      disabled={adminLoginLoading}
+                      className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-md disabled:opacity-50"
+                    >
+                      {adminLoginLoading ? (
+                        <>
+                          <RefreshCw className="animate-spin" size={13} />
+                          <span>Verifying admin token...</span>
+                        </>
+                      ) : (
+                        <>
+                          <LogIn size={13} />
+                          <span>Admin Login / অ্যাডমিন প্রবেশ</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* Horizontal Divider */}
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-slate-100"></div>
+                <span className="flex-shrink mx-4 text-slate-400 text-[10px] uppercase font-bold tracking-widest">Or Sandbox</span>
+                <div className="flex-grow border-t border-slate-100"></div>
+              </div>
+
+              {/* Guest Login Bypass */}
+              <button
+                type="button"
+                onClick={() => setBypassLogin(true)}
+                className="w-full py-2.5 text-xs text-slate-500 hover:text-slate-800 hover:bg-slate-50 font-bold rounded-xl text-center transition cursor-pointer border border-dashed border-slate-200 hover:border-slate-300"
+              >
+                🖥️ Use Offline Guest Sandbox (অতিথি মোড)
+              </button>
+
+            </div>
+          </div>
+
+          {/* Helpful Support Footer */}
+          <div className="text-center mt-6 text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+            Developed for Bengal Rehab Group Speech Pathologists
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex bg-slate-100 font-sans text-slate-900 h-screen w-screen overflow-hidden" id="vocalis-app-root">
       {/* Hidden file uploader for Branding Custom Logo */}
@@ -2112,9 +2404,9 @@ ${isCurrentlyActive
           <div className="pt-4">
             <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-3 mb-2">Sync Status</div>
             <div className="mx-2 p-2.5 bg-slate-800/40 rounded-lg flex items-center gap-2 text-[10px] text-slate-450 border border-slate-800/80">
-              <div className={`w-2 h-2 rounded-full shrink-0 ${user ? 'bg-emerald-500 shadow-xs' : 'bg-amber-400 animate-ping'}`} />
+              <div className={`w-2 h-2 rounded-full shrink-0 ${user && !user.isAnonymous ? 'bg-emerald-500 shadow-xs' : 'bg-amber-400 animate-pulse'}`} />
               <span className="font-semibold truncate">
-                {user ? (user.isAnonymous ? 'Google Cloud Sync Active' : 'Encrypted cloud backup') : 'Offline sandbox mode'}
+                {user ? (user.isAnonymous ? 'Guest Mode (Local Device)' : 'Secure Google Cloud Sync') : 'Offline sandbox mode'}
               </span>
             </div>
           </div>
@@ -2258,9 +2550,9 @@ ${isCurrentlyActive
                 <div className="pt-4">
                   <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-3 mb-2">Sync Status</div>
                   <div className="mx-2 p-2.5 bg-slate-800/40 rounded-lg flex items-center gap-2 text-[10px] text-slate-400 border border-slate-800/60">
-                    <div className={`w-2 h-2 rounded-full shrink-0 ${user ? 'bg-emerald-500 shadow-xs' : 'bg-amber-400 animate-ping'}`} />
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${user && !user.isAnonymous ? 'bg-emerald-500 shadow-xs' : 'bg-amber-400 animate-pulse'}`} />
                     <span className="font-semibold truncate">
-                      {user ? (user.isAnonymous ? 'Google Cloud Sync Active' : 'Cloud sync connected') : 'Offline local cache'}
+                      {user ? (user.isAnonymous ? 'Guest Mode (Local Device)' : 'Cloud sync connected') : 'Offline local cache'}
                     </span>
                   </div>
                 </div>
@@ -2363,7 +2655,7 @@ ${isCurrentlyActive
             ) : user ? (
               <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-1 pl-2 rounded-lg">
                 <span className="hidden sm:inline text-[10px] font-semibold text-slate-500 mr-1 max-w-[120px] truncate">
-                  {user.isAnonymous ? "Cloud Guest" : user.email}
+                  {user.isAnonymous ? "Cloud Guest" : (user.email === 'admin@brgspeakhub.com' ? "Admin Mode" : user.email)}
                 </span>
                 {!user.isAnonymous ? (
                   <button
@@ -2379,7 +2671,7 @@ ${isCurrentlyActive
                 ) : (
                   <button
                     type="button"
-                    onClick={handleLogIn}
+                    onClick={openLoginModal}
                     className="p-1 px-1.5 text-blue-600 hover:bg-blue-50 hover:text-blue-700 rounded-md cursor-pointer transition text-[10px] font-bold flex items-center gap-1"
                     title="Sign In with Google"
                     id="btn-sign-in"
@@ -2392,7 +2684,7 @@ ${isCurrentlyActive
             ) : (
               <button
                 type="button"
-                onClick={handleLogIn}
+                onClick={openLoginModal}
                 className="px-3 py-1.5 bg-slate-900 border border-slate-950 hover:bg-slate-800 text-white font-semibold text-xs rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
                 id="btn-sign-in"
               >
@@ -2442,26 +2734,31 @@ ${isCurrentlyActive
             <div className="space-y-6 max-w-7xl mx-auto">
               
               {/* Caching/Sandbox layout warning when offline */}
-              {!user && (
-                <div className="bg-gradient-to-r from-slate-900 to-blue-950 text-white rounded-xl p-5 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              {(!user || user.isAnonymous) && (
+                <div className="bg-gradient-to-r from-slate-900 to-blue-950 text-white rounded-xl p-5 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border border-blue-500/20">
                   <div className="space-y-1">
-                    <span className="text-[9px] font-bold tracking-widest uppercase bg-blue-500/30 text-blue-200 px-2 py-0.5 rounded-md border border-blue-500/10 inline-block">
-                      Guest Practitioner Access
+                    <span className="text-[9px] font-bold tracking-widest uppercase bg-amber-500/30 text-amber-200 px-2 py-0.5 rounded-md border border-amber-500/10 inline-block animate-pulse">
+                      Guest / Device-Specific Mode (অস্থায়ী মোড)
                     </span>
                     <h2 className="text-base font-bold tracking-tight">
-                      Store Clinical Data Securely in the Cloud
+                      Access your data from any computer / অন্য কম্পিউটার থেকে ডাটা দেখতে চান?
                     </h2>
                     <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-                      You are using local sandbox storage. Enable instant encrypted backup to tables with Google cloud syncing.
+                      You are using a Guest account. Data created here is restricted to this browser only. 
+                      <strong> Sign In with Google</strong> using the same account on both computers to sync and view your plans across devices!
+                      <br />
+                      <span className="text-[11px] text-slate-400 mt-1 block">
+                        (আপনি গেস্ট মোডে আছেন। ডাটা শুধুমাত্র এই কম্পিউটারেই থাকবে। অন্য কম্পিউটারে একই ডাটা দেখতে অনুগ্রহ করে আপনার গুগল অ্যাকাউন্ট দিয়ে লগইন করুন!)
+                      </span>
                     </p>
                   </div>
                   <button
                     type="button"
-                    onClick={handleLogIn}
+                    onClick={openLoginModal}
                     className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg transition-all cursor-pointer shrink-0 shadow-lg shadow-blue-950/20"
                     id="banner-sync-trigger"
                   >
-                    Configure Cloud Sync
+                    Sign In / Secure Sync / লগইন করুন
                   </button>
                 </div>
               )}
@@ -3731,6 +4028,149 @@ ${isCurrentlyActive
                   </svg>
                   Confirm & Send
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* UNIFIED LOGIN MODAL */}
+      <AnimatePresence>
+        {isLoginModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.15 }}
+              className="bg-white rounded-2xl border border-slate-100 shadow-2xl max-w-sm w-full overflow-hidden flex flex-col"
+            >
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <AppLogo className="w-8 h-8 rounded" />
+                  <div>
+                    <h3 className="font-extrabold text-slate-800 text-xs tracking-tight">Secure Portal Sign In</h3>
+                    <p className="text-[10px] text-slate-500 font-medium">Access your cloud-synced files</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsLoginModalOpen(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 cursor-pointer transition"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-5">
+                {/* Google Sign-in */}
+                {!showAdminForm && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleGoogleSignIn();
+                      setIsLoginModalOpen(false);
+                    }}
+                    className="w-full py-2.5 px-4 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 text-slate-700 font-bold text-xs rounded-xl transition flex items-center justify-center gap-2.5 cursor-pointer shadow-xs"
+                  >
+                    <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
+                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335"/>
+                    </svg>
+                    <span>Google দিয়ে লগইন করুন / Sign In</span>
+                  </button>
+                )}
+
+                {/* Divider */}
+                {!showAdminForm ? (
+                  <div className="relative flex py-1 items-center">
+                    <div className="flex-grow border-t border-slate-100"></div>
+                    <span className="flex-shrink mx-4 text-slate-400 text-[10px] uppercase font-bold tracking-widest">Or Admin Access</span>
+                    <div className="flex-grow border-t border-slate-100"></div>
+                  </div>
+                ) : null}
+
+                {/* Admin Mode Toggle/Form */}
+                {!showAdminForm ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminForm(true)}
+                    className="w-full py-2 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200/60 rounded-xl text-slate-600 font-bold text-xs transition cursor-pointer text-center"
+                  >
+                    🔐 Admin Mode / অ্যাডমিন প্যানেল
+                  </button>
+                ) : (
+                  <form 
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleAdminLoginSubmit(e);
+                    }} 
+                    className="space-y-4"
+                  >
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Admin User ID</label>
+                      <div className="relative">
+                        <User className="absolute left-3 top-2 text-slate-400" size={14} />
+                        <input
+                          type="text"
+                          required
+                          placeholder="admin"
+                          value={adminUsername}
+                          onChange={(e) => setAdminUsername(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 py-1.5 pl-9 pr-4 text-xs rounded-lg focus:border-blue-500 focus:bg-white focus:outline-hidden transition text-slate-800"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Admin Password</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">***</span>
+                        <input
+                          type="password"
+                          required
+                          placeholder="••••••••"
+                          value={adminPassword}
+                          onChange={(e) => setAdminPassword(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-200 py-1.5 pl-9 pr-4 text-xs rounded-lg focus:border-blue-500 focus:bg-white focus:outline-hidden transition text-slate-800"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pt-2 flex flex-col gap-2">
+                      <button
+                        type="submit"
+                        disabled={adminLoginLoading}
+                        className="w-full py-2 px-4 bg-slate-900 border border-slate-950 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-md disabled:opacity-50"
+                      >
+                        {adminLoginLoading ? (
+                          <>
+                            <RefreshCw className="animate-spin" size={13} />
+                            <span>Verifying...</span>
+                          </>
+                        ) : (
+                          <>
+                            <LogIn size={13} />
+                            <span>Login as Admin</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAdminForm(false);
+                          setAdminUsername('');
+                          setAdminPassword('');
+                        }}
+                        className="w-full py-2 text-xs text-slate-500 hover:text-slate-700 font-semibold text-center transition cursor-pointer"
+                      >
+                        Back to Google Sign In
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
             </motion.div>
           </div>
