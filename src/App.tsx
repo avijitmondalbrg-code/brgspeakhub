@@ -6,7 +6,9 @@ import {
   ChevronRight, HelpCircle, FileCheck, Check, Info, Menu, X, MessageSquare, Settings, Link, Copy
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { auth, googleProvider, signInWithPopup, db } from './firebase';
+import { auth, googleProvider, db } from './firebase';
+import { signInWithGoogle } from './services/authService';
+import { createOrUpdateUser } from './services/userService';
 import { onAuthStateChanged, signOut, signInAnonymously, User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { TherapyPlan, WhatsAppSettings } from './types';
@@ -912,18 +914,29 @@ export default function App() {
 
   // Auth logins
   const handleGoogleSignIn = async () => {
-    try {
-      setAuthLoading(true);
-      await signInWithPopup(auth, googleProvider);
-      setIsLoginModalOpen(false);
-    } catch (error: any) {
-      setNotification({
-        message: `Sign in error: ${error.message || 'Verification cancelled'}`,
-        type: 'error'
-      });
-      setAuthLoading(false);
-    }
-  };
+  try {
+    setAuthLoading(true);
+
+    const result = await signInWithGoogle();
+
+    await createOrUpdateUser({
+      uid: result.user.uid,
+      name: result.user.displayName || "",
+      email: result.user.email || "",
+      photoURL: result.user.photoURL || "",
+      role: "user",
+    });
+
+    setIsLoginModalOpen(false);
+  } catch (error: any) {
+    setNotification({
+      message: `Sign in error: ${error.message || "Verification cancelled"}`,
+      type: "error",
+    });
+  } finally {
+    setAuthLoading(false);
+  }
+};
 
   const openLoginModal = () => {
     setIsLoginModalOpen(true);
