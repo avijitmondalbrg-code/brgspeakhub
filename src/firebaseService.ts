@@ -47,9 +47,11 @@ export async function saveTherapyPlan(plan: Omit<TherapyPlan, 'createdAt' | 'upd
         console.log("Admin API saved report ID:", plan.id);
         return;
       }
-      throw new Error('Admin API save request failed');
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.message || 'Admin API save request failed');
     } catch (error) {
-      console.warn("Failed saving plan via Admin API, falling back to client SDK:", error);
+      console.error("Failed saving plan via Admin API:", error);
+      throw error;
     }
   }
 
@@ -114,9 +116,11 @@ export async function deleteTherapyPlan(planId: string): Promise<void> {
         console.log("Admin API deleted report ID:", planId);
         return;
       }
-      throw new Error('Admin API delete request failed');
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.message || 'Admin API delete request failed');
     } catch (error) {
-      console.warn("Failed deleting plan via Admin API, falling back to client SDK:", error);
+      console.error("Failed deleting plan via Admin API:", error);
+      throw error;
     }
   }
 
@@ -131,12 +135,11 @@ export async function deleteTherapyPlan(planId: string): Promise<void> {
 
 export async function getTherapyPlans(ownerId: string, isAdmin = false): Promise<TherapyPlan[]> {
   const adminToken = typeof window !== 'undefined' ? localStorage.getItem('admin_token') : null;
-  if (adminToken || isAdmin) {
-    const token = adminToken || "admin-session-token-9830447176";
+  if (adminToken) {
     try {
       const response = await fetch(`/api/admin/plans`, {
         headers: {
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${adminToken}`
         }
       });
       if (response.ok) {
@@ -145,8 +148,11 @@ export async function getTherapyPlans(ownerId: string, isAdmin = false): Promise
           return data.plans;
         }
       }
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.message || 'Admin API failed to retrieve plans');
     } catch (error) {
-      console.error("Failed fetching plans via Admin API, falling back to client SDK:", error);
+      console.error("Failed fetching plans via Admin API:", error);
+      throw error;
     }
   }
 

@@ -623,8 +623,13 @@ export default function App() {
 
   // Fetch plans from server or fell back to Local Storage
   useEffect(() => {
-    loadPlans();
-  }, [user]);
+    const isUserLoggedIn = user && !user.isAnonymous;
+    if (isUserLoggedIn || bypassLogin) {
+      loadPlans();
+    } else {
+      loadLocalPlans();
+    }
+  }, [user, bypassLogin]);
 
   // Sync WhatsApp settings on user state update
   useEffect(() => {
@@ -677,7 +682,7 @@ export default function App() {
   // Sync WhatsApp settings on user state update
   useEffect(() => {
     const fetchWhatsAppSettings = async () => {
-      if (user) {
+      if (user && !user.isAnonymous && user.uid !== 'admin-system-uid' && user.email !== 'admin@brgspeakhub.com') {
         try {
           const cloudSettings = await getWhatsAppSettings(user.uid);
           if (cloudSettings) {
@@ -715,7 +720,7 @@ export default function App() {
     safeLocalStorage.setItem('slp_wa_lang_code', settings.langCode || 'en');
     safeLocalStorage.setItem('slp_wa_send_method', settings.sendMethod || 'link');
 
-    if (user) {
+    if (user && !user.isAnonymous && user.uid !== 'admin-system-uid' && user.email !== 'admin@brgspeakhub.com') {
       try {
         await saveWhatsAppSettings(user.uid, settings);
         setNotification({
@@ -839,9 +844,11 @@ export default function App() {
 
   const loadPlans = async () => {
     setLoadingPlans(true);
-    if (user) {
+    const isCloudUser = !!(user && (!user.isAnonymous || localStorage.getItem('admin_token')));
+    if (isCloudUser) {
       try {
-        const cloudPlans = await getTherapyPlans(user.uid, user.email === 'admin@brgspeakhub.com');
+        const isAdmin = user!.email === 'admin@brgspeakhub.com' || user!.email === 'avijitmondal.brg@gmail.com';
+        const cloudPlans = await getTherapyPlans(user!.uid, isAdmin);
         setPlans(cloudPlans);
       } catch (err) {
         console.error("Cloud fetching failed, falling back to local files", err);
@@ -1056,9 +1063,10 @@ export default function App() {
       return;
     }
 
+    const isCloudUser = !!(user && (!user.isAnonymous || localStorage.getItem('admin_token')));
     setIsSaving(true);
     try {
-      if (user) {
+      if (isCloudUser) {
         // Secure Cloud Sync
         await saveTherapyPlan(currentPlan, !isEditing);
         console.log("Saved report ID:", currentPlan.id);
@@ -1085,7 +1093,7 @@ export default function App() {
       }
 
       setNotification({
-        message: user 
+        message: isCloudUser 
           ? 'Clinical report synchronized safely to your secure Google Cloud database.'
           : 'Clinical report saved locally. Sign in to push to the Cloud.',
         type: 'success'
@@ -1104,8 +1112,9 @@ export default function App() {
 
   // Delete plan
   const handleDeletePlan = async (id: string) => {
+    const isCloudUser = !!(user && (!user.isAnonymous || localStorage.getItem('admin_token')));
     try {
-      if (user) {
+      if (isCloudUser) {
         await deleteTherapyPlan(id);
         await loadPlans();
       } else {
@@ -2235,6 +2244,11 @@ ${isCurrentlyActive
                     <p className="text-xs text-slate-500 font-medium">
                       অ্যাডমিন অ্যাকাউন্ট দিয়ে প্রবেশ করে সকল প্র্যাক্টিশনারের রেকর্ড অ্যাক্সেস করুন।
                     </p>
+                    <div className="mt-2.5 bg-blue-50/70 border border-blue-100 rounded-lg p-2.5 text-left">
+                      <p className="text-[10.5px] text-blue-700 leading-relaxed font-semibold">
+                        💡 <span className="underline">পরামর্শ (Tip):</span> আপনার জিমেইল অ্যাকাউন্ট (<span className="font-mono text-blue-800 font-bold">avijitmondal.brg@gmail.com</span>) দিয়ে সরাসরি Google Login-এর মাধ্যমে কোনো পাসওয়ার্ড ছাড়াই সম্পূর্ণ নিরাপদভাবে "Admin Mode" এবং ক্লাউড সিঙ্ক সক্রিয় করতে পারেন।
+                      </p>
+                    </div>
                   </div>
 
                   {/* Admin User ID */}
@@ -2675,7 +2689,7 @@ ${isCurrentlyActive
             ) : user ? (
               <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-1 pl-2 rounded-lg">
                 <span className="hidden sm:inline text-[10px] font-semibold text-slate-500 mr-1 max-w-[120px] truncate">
-                  {user.isAnonymous ? "Cloud Guest" : (user.email === 'admin@brgspeakhub.com' ? "Admin Mode" : user.email)}
+                  {user.isAnonymous ? "Cloud Guest" : ((user.email === 'admin@brgspeakhub.com' || user.email === 'avijitmondal.brg@gmail.com') ? "Admin Mode" : user.email)}
                 </span>
                 {!user.isAnonymous ? (
                   <button

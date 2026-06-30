@@ -84,7 +84,11 @@ async function startServer() {
       res.json({ success: true, plans });
     } catch (error: any) {
       console.error("Failed to fetch admin plans:", error);
-      res.status(500).json({ success: false, message: error.message });
+      let friendlyMessage = error.message;
+      if (error.message && (error.message.includes("PERMISSION_DENIED") || error.code === 7)) {
+        friendlyMessage = "GCP Service Account lacks IAM cross-project permissions to access database 'ai-studio-b65bcc54-5bc5-490f-b5a1-3fdede15e319'. Please use your Google Sign-In account (avijitmondal.brg@gmail.com) directly on the client to securely fetch and manage clinical database records.";
+      }
+      res.status(500).json({ success: false, message: friendlyMessage });
     }
   });
 
@@ -96,7 +100,11 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error("Failed to delete admin plan:", error);
-      res.status(500).json({ success: false, message: error.message });
+      let friendlyMessage = error.message;
+      if (error.message && (error.message.includes("PERMISSION_DENIED") || error.code === 7)) {
+        friendlyMessage = "GCP Service Account lacks IAM cross-project permissions to access database 'ai-studio-b65bcc54-5bc5-490f-b5a1-3fdede15e319'. Please use your Google Sign-In account (avijitmondal.brg@gmail.com) directly on the client to securely delete clinical database records.";
+      }
+      res.status(500).json({ success: false, message: friendlyMessage });
     }
   });
 
@@ -119,7 +127,11 @@ async function startServer() {
       res.json({ success: true });
     } catch (error: any) {
       console.error("Failed to update admin plan:", error);
-      res.status(500).json({ success: false, message: error.message });
+      let friendlyMessage = error.message;
+      if (error.message && (error.message.includes("PERMISSION_DENIED") || error.code === 7)) {
+        friendlyMessage = "GCP Service Account lacks IAM cross-project permissions to access database 'ai-studio-b65bcc54-5bc5-490f-b5a1-3fdede15e319'. Please use your Google Sign-In account (avijitmondal.brg@gmail.com) directly on the client to securely update clinical database records.";
+      }
+      res.status(500).json({ success: false, message: friendlyMessage });
     }
   });
 

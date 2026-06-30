@@ -15,10 +15,17 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'admin@brgspeakhub.com' ||
+        request.auth.token.email == 'avijitmondal.brg@gmail.com'
+      );
+    }
+
     // 3. Validation helper for TherapyPlan entity
     function isValidTherapyPlan(data) {
       return data.patientName is string && data.patientName.size() > 0 && data.patientName.size() <= 200
-        && data.ownerId == request.auth.uid
+        && (data.ownerId == request.auth.uid || isAdmin())
         && data.date is string && data.date.size() <= 30
         && (!('age' in data) || (data.age is string && data.age.size() <= 30))
         && (!('gender' in data) || (data.gender is string && data.gender.size() <= 30))
@@ -38,23 +45,23 @@ service cloud.firestore {
     match /therapyPlans/{planId} {
       allow get: if true;
       
-      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || request.auth.token.email == 'admin@brgspeakhub.com');
+      allow list: if isSignedIn() && (resource.data.ownerId == request.auth.uid || isAdmin());
 
       allow create: if isSignedIn()
         && isValidId(planId)
-        && (isValidTherapyPlan(request.resource.data) || request.auth.token.email == 'admin@brgspeakhub.com')
+        && (isValidTherapyPlan(request.resource.data) || isAdmin())
         && request.resource.data.createdAt == request.time;
 
       allow update: if isSignedIn()
         && isValidId(planId)
-        && (isValidTherapyPlan(request.resource.data) || request.auth.token.email == 'admin@brgspeakhub.com')
-        && (resource.data.ownerId == request.auth.uid || request.auth.token.email == 'admin@brgspeakhub.com')
+        && (isValidTherapyPlan(request.resource.data) || isAdmin())
+        && (resource.data.ownerId == request.auth.uid || isAdmin())
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.updatedAt == request.time;
 
       allow delete: if isSignedIn()
         && isValidId(planId)
-        && (resource.data.ownerId == request.auth.uid || request.auth.token.email == 'admin@brgspeakhub.com');
+        && (resource.data.ownerId == request.auth.uid || isAdmin());
     }
 
     // 5. User Settings collection matching rules
