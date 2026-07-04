@@ -9,7 +9,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { auth, googleProvider, db } from './firebase';
 import { signInWithGoogle } from './services/authService';
 import { createOrUpdateUser } from './services/userService';
-import { onAuthStateChanged, signOut, signInAnonymously, User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { useAuth } from './contexts/AuthContext';
+import { onAuthStateChanged, signOut, User as FirebaseUser, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { TherapyPlan, WhatsAppSettings } from './types';
 import { saveTherapyPlan, deleteTherapyPlan, getTherapyPlans, saveWhatsAppSettings, getWhatsAppSettings, getTherapyPlan } from './firebaseService';
@@ -303,7 +304,7 @@ const setupOklchInterceptor = () => {
 };
 
 export default function App() {
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const { firebaseUser, profile, loading } = useAuth();
   const [authLoading, setAuthLoading] = useState(true);
   const [plans, setPlans] = useState<TherapyPlan[]>([]);
   const [loadingPlans, setLoadingPlans] = useState(false);
@@ -414,7 +415,7 @@ export default function App() {
   const [isDiagnosticMode, setIsDiagnosticMode] = useState(false);
   const [whatsappSettings, setWhatsappSettings] = useState<WhatsAppSettings>({
     accessToken: safeLocalStorage.getItem('slp_wa_access_token') || 'EAAaIJ8yMa4sBRkR9hGWgaQPBZBxKqWbUzGOYcHDNc2eNTYee5KDUNlSMegxggjhqNYesll1ZBnxZBGkd8xPftzZAT68VIy8iibMMoD5zXkrJN1j0ZCXNH7QXxO7CZCqkr2QzayVKnki5lUu687dByehoeJIVn9rZCmfH493NKa6hvHBnVjKbhKrVnKhiPCAtaqgkwZDZD',
-    phoneNumberId: safeLocalStorage.getItem('slp_wa_phone_number_id') || '1183533281504386',
+    phoneNumberId: safeLocalStorage.getItem('slp_wa_phone_number_id') || '1174735485723345',
     businessAccountId: safeLocalStorage.getItem('slp_wa_business_account_id') || '1323055779302168',
     templateName: safeLocalStorage.getItem('slp_wa_template_name') || 'speech_report_ready',
     utilityTemplateName: safeLocalStorage.getItem('slp_wa_utility_template_name') || 'speech_report_ready',
@@ -526,25 +527,23 @@ export default function App() {
     }
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        setUser(firebaseUser);
-        setAuthLoading(false);
-        const displayName = firebaseUser.isAnonymous ? "Guest Session" : (firebaseUser.email || "Practitioner");
-        setNotification({
-          message: `Logged in securely as ${displayName}`,
-          type: 'success'
-        });
-      } else {
-        try {
-          await signInAnonymously(auth);
-        } catch (error) {
-          console.error("Auto anonymous sign-in failed:", error);
-          setUser(null);
-          setAuthLoading(false);
-        }
-      }
+  if (firebaseUser) {
+    setAuthLoading(false);
+
+    const displayName = firebaseUser.isAnonymous
+      ? "Guest Session"
+      : (firebaseUser.email || "Practitioner");
+
+    setNotification({
+      message: `Logged in securely as ${displayName}`,
+      type: 'success'
     });
-    return unsubscribe;
+  } else {
+    setAuthLoading(false);
+  }
+});
+
+return unsubscribe;
   }, []);
 
   // Check URL parameters for public shared report link
@@ -625,13 +624,14 @@ export default function App() {
 
   // Fetch plans from server or fell back to Local Storage
   useEffect(() => {
-    const isUserLoggedIn = user && !user.isAnonymous;
-    if (isUserLoggedIn || bypassLogin) {
-      loadPlans();
-    } else {
-      loadLocalPlans();
-    }
-  }, [user, bypassLogin]);
+  const isUserLoggedIn = firebaseUser && !firebaseUser.isAnonymous;
+
+  if (isUserLoggedIn || bypassLogin) {
+    loadPlans();
+  } else {
+    loadLocalPlans();
+  }
+}, [firebaseUser, bypassLogin]);
 
   // Sync WhatsApp settings on user state update
   useEffect(() => {
@@ -645,7 +645,7 @@ export default function App() {
     const newActiveToken = 'EAAaIJ8yMa4sBRkR9hGWgaQPBZBxKqWbUzGOYcHDNc2eNTYee5KDUNlSMegxggjhqNYesll1ZBnxZBGkd8xPftzZAT68VIy8iibMMoD5zXkrJN1j0ZCXNH7QXxO7CZCqkr2QzayVKnki5lUu687dByehoeJIVn9rZCmfH493NKa6hvHBnVjKbhKrVnKhiPCAtaqgkwZDZD';
     
     const obseletePhoneId = '1193795173813206';
-    const newPhoneId = '1183533281504386';
+    const newPhoneId = '1174735485723345';
     
     const obseleteBusinessId = '995786956257682';
     const newBusinessId = '1323055779302168';
@@ -684,13 +684,20 @@ export default function App() {
   // Sync WhatsApp settings on user state update
   useEffect(() => {
     const fetchWhatsAppSettings = async () => {
-      if (user && !user.isAnonymous && user.uid !== 'admin-system-uid' && user.email !== 'admin@brgspeakhub.com') {
+      if (
+  firebaseUser &&
+  !firebaseUser.isAnonymous &&
+  firebaseUser.uid !== 'admin-system-uid' &&
+  firebaseUser.email !== 'admin@brgspeakhub.com'
+) {
+  
         try {
-          const cloudSettings = await getWhatsAppSettings(user.uid);
+         const cloudSettings = await getWhatsAppSettings(firebaseUser.uid);
           if (cloudSettings) {
+            console.log("Cloud WhatsApp Settings:", cloudSettings);
             const merged: WhatsAppSettings = {
               accessToken: cloudSettings.accessToken || 'EAAaIJ8yMa4sBRkR9hGWgaQPBZBxKqWbUzGOYcHDNc2eNTYee5KDUNlSMegxggjhqNYesll1ZBnxZBGkd8xPftzZAT68VIy8iibMMoD5zXkrJN1j0ZCXNH7QXxO7CZCqkr2QzayVKnki5lUu687dByehoeJIVn9rZCmfH493NKa6hvHBnVjKbhKrVnKhiPCAtaqgkwZDZD',
-              phoneNumberId: cloudSettings.phoneNumberId || '1183533281504386',
+              phoneNumberId: cloudSettings.phoneNumberId || '1174735485723345',
               businessAccountId: cloudSettings.businessAccountId || '1323055779302168',
               templateName: cloudSettings.templateName || 'speech_report_ready',
               langCode: cloudSettings.langCode || 'en',
@@ -710,7 +717,7 @@ export default function App() {
       }
     };
     fetchWhatsAppSettings();
-  }, [user]);
+  }, [firebaseUser]);
 
   const handleSaveWhatsAppSettings = async (settings: WhatsAppSettings) => {
     setWhatsappSettings(settings);
@@ -722,9 +729,14 @@ export default function App() {
     safeLocalStorage.setItem('slp_wa_lang_code', settings.langCode || 'en');
     safeLocalStorage.setItem('slp_wa_send_method', settings.sendMethod || 'link');
 
-    if (user && !user.isAnonymous && user.uid !== 'admin-system-uid' && user.email !== 'admin@brgspeakhub.com') {
+    if (
+  firebaseUser &&
+  !firebaseUser.isAnonymous &&
+  firebaseUser.uid !== 'admin-system-uid' &&
+  firebaseUser.email !== 'admin@brgspeakhub.com'
+  ) {
       try {
-        await saveWhatsAppSettings(user.uid, settings);
+        await saveWhatsAppSettings(firebaseUser.uid, settings);
         setNotification({
           message: 'WhatsApp automated parameters saved & synced with your online account!',
           type: 'success'
@@ -846,12 +858,20 @@ export default function App() {
 
   const loadPlans = async () => {
     setLoadingPlans(true);
-    const isCloudUser = !!(user && (!user.isAnonymous || localStorage.getItem('admin_token')));
-    if (isCloudUser) {
-      try {
-        const isAdmin = user!.email === 'admin@brgspeakhub.com' || user!.email === 'avijitmondal.brg@gmail.com';
-        const cloudPlans = await getTherapyPlans(user!.uid, isAdmin);
-        setPlans(cloudPlans);
+    const isCloudUser = !!(
+  firebaseUser &&
+  (!firebaseUser.isAnonymous || localStorage.getItem('admin_token'))
+);
+
+if (isCloudUser && firebaseUser) {
+  try {
+    const isAdmin =
+      firebaseUser.email === 'admin@brgspeakhub.com' ||
+      firebaseUser.email === 'avijitmondal.brg@gmail.com';
+
+    const cloudPlans = await getTherapyPlans(firebaseUser.uid, isAdmin);
+
+    setPlans(cloudPlans);
       } catch (err) {
         console.error("Cloud fetching failed, falling back to local files", err);
         loadLocalPlans();
@@ -994,9 +1014,9 @@ export default function App() {
         
         // Mock the user object
         const adminUser = {
-          uid: data.user.uid,
-          email: data.user.email,
-          displayName: data.user.displayName,
+          uid: data.firebaseUser.uid,
+          email: data.firebaseUser.email,
+          displayName: data.firebaseUser.displayName,
           isAnonymous: false
         } as any;
         
@@ -1043,7 +1063,7 @@ export default function App() {
 
   // Add & edit plans
   const triggerCreateNew = () => {
-    const newPlan = createEmptyPlan(user?.uid || 'local-user');
+    const newPlan = createEmptyPlan(firebaseUser?.uid || 'local-user');
     setSelectedTemplate('');
     setCurrentPlan(newPlan);
     setIsEditing(false);
@@ -1076,7 +1096,7 @@ export default function App() {
       return;
     }
 
-    const isCloudUser = !!(user && (!user.isAnonymous || localStorage.getItem('admin_token')));
+    const isCloudUser = !!(firebaseUser && (!firebaseUser.isAnonymous || localStorage.getItem('admin_token')));
     setIsSaving(true);
     try {
       if (isCloudUser) {
@@ -1125,7 +1145,7 @@ export default function App() {
 
   // Delete plan
   const handleDeletePlan = async (id: string) => {
-    const isCloudUser = !!(user && (!user.isAnonymous || localStorage.getItem('admin_token')));
+    const isCloudUser = !!(firebaseUser && (!firebaseUser.isAnonymous || localStorage.getItem('admin_token')));
     try {
       if (isCloudUser) {
         await deleteTherapyPlan(id);
@@ -1424,7 +1444,7 @@ ${isCurrentlyActive
         const confirmed = await confirmWhatsAppMessage(sanitizedPhone, confirmationMessage);
         if (!confirmed) {
           setNotification({
-            message: `WhatsApp delivery flow was cancelled by user.`,
+            message: `WhatsApp delivery flow was cancelled by firebaseUser.`,
             type: 'info'
           });
           return;
@@ -2156,7 +2176,7 @@ ${isCurrentlyActive
   }
 
   // 2. Full-screen Portal Gate / Login Page
-  const isUserLoggedIn = user && !user.isAnonymous;
+  const isUserLoggedIn = !!firebaseUser && !firebaseUser.isAnonymous;
   if (!isUserLoggedIn && !bypassLogin) {
     return (
       <div className="min-h-screen w-screen bg-slate-100 flex flex-col justify-center items-center p-4 relative font-sans text-slate-900 overflow-y-auto" id="brg-portal-gate">
@@ -2451,9 +2471,9 @@ ${isCurrentlyActive
           <div className="pt-4">
             <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-3 mb-2">Sync Status</div>
             <div className="mx-2 p-2.5 bg-slate-800/40 rounded-lg flex items-center gap-2 text-[10px] text-slate-450 border border-slate-800/80">
-              <div className={`w-2 h-2 rounded-full shrink-0 ${user && !user.isAnonymous ? 'bg-emerald-500 shadow-xs' : 'bg-amber-400 animate-pulse'}`} />
+              <div className={`w-2 h-2 rounded-full shrink-0 ${firebaseUser && !firebaseUser.isAnonymous ? 'bg-emerald-500 shadow-xs' : 'bg-amber-400 animate-pulse'}`} />
               <span className="font-semibold truncate">
-                {user ? (user.isAnonymous ? 'Guest Mode (Local Device)' : 'Secure Google Cloud Sync') : 'Offline sandbox mode'}
+                {firebaseUser ? (firebaseUser.isAnonymous ? 'Guest Mode (Local Device)' : 'Secure Google Cloud Sync') : 'Offline sandbox mode'}
               </span>
             </div>
           </div>
@@ -2463,10 +2483,10 @@ ${isCurrentlyActive
         <div className="p-4 border-t border-slate-800 bg-slate-950/20">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-full bg-slate-700 text-slate-200 font-extrabold flex items-center justify-center text-xs border border-slate-600/50 shrink-0">
-              {user ? (user.email ? user.email.substring(0, 2).toUpperCase() : 'GS') : 'SLP'}
+              {firebaseUser ? (firebaseUser.email ? firebaseUser.email.substring(0, 2).toUpperCase() : 'GS') : 'SLP'}
             </div>
             <div className="text-xs min-w-0 flex-1">
-              <p className="font-semibold text-slate-200 truncate">{user ? (user.email || 'Cloud Guest Account') : 'BRG'}</p>
+              <p className="font-semibold text-slate-200 truncate">{firebaseUser ? (firebaseUser.email || 'Cloud Guest Account') : 'BRG'}</p>
               <p className="text-slate-500 text-[10px] uppercase font-bold tracking-wider">Senior SLP</p>
             </div>
           </div>
@@ -2597,9 +2617,13 @@ ${isCurrentlyActive
                 <div className="pt-4">
                   <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-3 mb-2">Sync Status</div>
                   <div className="mx-2 p-2.5 bg-slate-800/40 rounded-lg flex items-center gap-2 text-[10px] text-slate-400 border border-slate-800/60">
-                    <div className={`w-2 h-2 rounded-full shrink-0 ${user && !user.isAnonymous ? 'bg-emerald-500 shadow-xs' : 'bg-amber-400 animate-pulse'}`} />
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${firebaseUser && !firebaseUser.isAnonymous ? 'bg-emerald-500 shadow-xs' : 'bg-amber-400 animate-pulse'}`} />
                     <span className="font-semibold truncate">
-                      {user ? (user.isAnonymous ? 'Guest Mode (Local Device)' : 'Cloud sync connected') : 'Offline local cache'}
+                      {firebaseUser
+  ? (firebaseUser.isAnonymous
+      ? 'Guest Mode (Local Device)'
+      : 'Secure Google Cloud Sync')
+  : 'Offline sandbox mode'}
                     </span>
                   </div>
                 </div>
@@ -2608,10 +2632,16 @@ ${isCurrentlyActive
               <div className="p-4 border-t border-slate-800 bg-slate-950/20">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-full bg-slate-700 text-slate-200 font-extrabold flex items-center justify-center text-xs border border-slate-600/50 shrink-0">
-                    {user ? (user.email ? user.email.substring(0, 2).toUpperCase() : 'GS') : 'SLP'}
+                    {firebaseUser
+  ? (firebaseUser.email
+      ? firebaseUser.email.substring(0, 2).toUpperCase()
+      : 'GS')
+  : 'SLP'}
                   </div>
                   <div className="text-xs min-w-0 flex-1">
-                    <p className="font-semibold text-slate-200 truncate">{user ? (user.email || 'Cloud Guest Account') : 'BRG'}</p>
+                    <p className="font-semibold text-slate-200 truncate">{firebaseUser
+  ? (firebaseUser.email || 'Cloud Guest Account')
+  : 'BRG'}</p>
                     <p className="text-slate-500 text-[9px] uppercase font-bold tracking-wider">Senior SLP</p>
                   </div>
                 </div>
@@ -2699,12 +2729,12 @@ ${isCurrentlyActive
             {/* Authentication state */}
             {authLoading ? (
               <div className="h-8 w-16 bg-slate-100 rounded-lg animate-pulse" />
-            ) : user ? (
+            ) : firebaseUser ? (
               <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-1 pl-2 rounded-lg">
                 <span className="hidden sm:inline text-[10px] font-semibold text-slate-500 mr-1 max-w-[120px] truncate">
-                  {user.isAnonymous ? "Cloud Guest" : ((user.email === 'admin@brgspeakhub.com' || user.email === 'avijitmondal.brg@gmail.com') ? "Admin Mode" : user.email)}
+                  {firebaseUser.isAnonymous ? "Cloud Guest" : ((firebaseUser.email === 'admin@brgspeakhub.com' || firebaseUser.email === 'avijitmondal.brg@gmail.com') ? "Admin Mode" : firebaseUser.email)}
                 </span>
-                {!user.isAnonymous ? (
+                {firebaseUser && !firebaseUser.isAnonymous ? (
                   <button
                     type="button"
                     onClick={handleLogActiveOut}
@@ -2781,7 +2811,7 @@ ${isCurrentlyActive
             <div className="space-y-6 max-w-7xl mx-auto">
               
               {/* Caching/Sandbox layout warning when offline */}
-              {(!user || user.isAnonymous) && (
+              {(!firebaseUser || firebaseUser.isAnonymous) && (
                 <div className="bg-gradient-to-r from-slate-900 to-blue-950 text-white rounded-xl p-5 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border border-blue-500/20">
                   <div className="space-y-1">
                     <span className="text-[9px] font-bold tracking-widest uppercase bg-amber-500/30 text-amber-200 px-2 py-0.5 rounded-md border border-amber-500/10 inline-block animate-pulse">
@@ -3684,8 +3714,8 @@ ${isCurrentlyActive
         <footer className="h-10 bg-slate-900 border-t border-slate-800 px-6 shrink-0 flex items-center justify-between text-[9px] font-medium text-slate-450 uppercase tracking-wider">
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${user ? 'bg-emerald-500' : 'bg-amber-400'}`} />
-              Sync: {user ? 'Connected & Cloud Encrypted' : 'Offline Local Mode'}
+              <span className={`w-2 h-2 rounded-full ${firebaseUser ? 'bg-emerald-500' : 'bg-amber-400'}`} />
+              Sync: {firebaseUser ? 'Connected & Cloud Encrypted' : 'Offline Local Mode'}
             </span>
             <span className="hidden sm:inline text-slate-600">•</span>
             <span className="hidden sm:inline">License ID: #SLP-PLAN-2023-X99</span>
